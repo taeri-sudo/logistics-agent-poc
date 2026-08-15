@@ -1,3 +1,4 @@
+from logistics_agent.nodes.assembly import package_assembly_agent
 from logistics_agent.nodes.entry import order_request_agent, user_profile_lookup
 from logistics_agent.nodes.supervisor import supervisor
 from logistics_agent.nodes.validation import order_validation_agent
@@ -9,4 +10,5 @@ __all__ = [
     "order_validation_agent",
     "supervisor",
     "warehouse_processing_agent",
+    "package_assembly_agent",
 ]

@@ -17,8 +17,21 @@ def order_validation_agent(state: GraphState) -> GraphState:
     if order["payment_status"] != "완료":
         errors.append(f"payment_status={order['payment_status']} (완료 필요)")
 
-    if not _is_valid_address(order["delivery_address"]):
-        errors.append("delivery_address 필수 필드 누락")
+    delivery_addresses = order["delivery_addresses"]
+    if not delivery_addresses:
+        errors.append("delivery_addresses 비어 있음")
+
+    for address in delivery_addresses:
+        if not _is_valid_address(address):
+            errors.append(f"{address.get('address_id')}: delivery_address 필수 필드 누락")
+
+    # item의 배송지 참조가 실제로 해석됐는지 (주소록에 없는 id는 여기서 걸린다)
+    known_ids = {address["address_id"] for address in delivery_addresses}
+    for item in order["item_list"]:
+        if item["delivery_address_id"] not in known_ids:
+            errors.append(
+                f"{item['item_id']}: delivery_address_id={item['delivery_address_id']} 참조 불가"
+            )
 
     passed = len(errors) == 0
     status = "통과" if passed else "실패"

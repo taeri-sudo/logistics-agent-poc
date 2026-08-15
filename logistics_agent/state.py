@@ -1,4 +1,4 @@
-"""State 스키마 v10 — LangGraph GraphState 정의."""
+"""State 스키마 v11 — LangGraph GraphState 정의."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from logistics_agent.enums import (
 
 
 class Address(TypedDict):
+    address_id: str
     recipient: str
     phone: str
     postal_code: str
@@ -28,7 +29,7 @@ class PaymentMethod(TypedDict):
 
 class UserProfile(TypedDict):
     user_id: str
-    delivery_address: Address
+    delivery_addresses: list[Address]  # 주소록. [0]이 기본배송지
     payment_method: PaymentMethod
     notification_enabled: bool
 
@@ -38,6 +39,7 @@ class Item(TypedDict):
     item_status: ItemStatus
     item_delay_reason: ItemDelayReason | None
     package_ref: str | None
+    delivery_address_id: str  # Order.delivery_addresses 중 하나를 참조
     location: dict | None
     customer_facing_status: CustomerFacingStatus
 
@@ -56,6 +58,7 @@ class NotificationEntry(TypedDict):
 class PackageState(TypedDict):
     package_id: str
     source_items: list[SourceItemRef]
+    delivery_address_id: str  # 이 패키지의 배송지 (미봉인 패키지 재사용 시 매칭 키)
     required_item_count: int
     arrived_item_count: int
     current_gps: dict | None
@@ -72,7 +75,7 @@ class PackageState(TypedDict):
 class OrderState(TypedDict):
     order_id: str
     order_created_at: str
-    delivery_address: Address
+    delivery_addresses: list[Address]  # 이 주문의 item들이 실제 참조하는 배송지만
     payment_status: PaymentStatus
     split_delivery_preference: bool
     cancel_requested_at: str | None
@@ -100,6 +103,9 @@ class GraphState(TypedDict, total=False):
 
     # Order State
     order: OrderState
+
+    # Package State (패키지조립agent가 생성/갱신)
+    packages: list[PackageState]
 
     # 주문검증agent 분기용
     validation_passed: bool

@@ -1,9 +1,10 @@
-"""LangGraph 최소 골격 — UserProfile → 주문요청 → 검증 → Supervisor → 창고처리."""
+"""LangGraph 최소 골격 — UserProfile → 주문요청 → 검증 → Supervisor → 창고처리 → 패키지조립."""
 
 from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
+from logistics_agent.nodes.assembly import package_assembly_agent
 from logistics_agent.nodes.entry import order_request_agent, user_profile_lookup
 from logistics_agent.nodes.supervisor import supervisor
 from logistics_agent.nodes.validation import order_validation_agent, route_after_validation
@@ -19,6 +20,7 @@ def build_graph():
     graph.add_node("order_validation_agent", order_validation_agent)
     graph.add_node("supervisor", supervisor)
     graph.add_node("warehouse_processing_agent", warehouse_processing_agent)
+    graph.add_node("package_assembly_agent", package_assembly_agent)
 
     graph.add_edge(START, "user_profile_lookup")
     graph.add_edge("user_profile_lookup", "order_request_agent")
@@ -29,7 +31,8 @@ def build_graph():
         {"supervisor": "supervisor", "end": END},
     )
     graph.add_edge("supervisor", "warehouse_processing_agent")
-    graph.add_edge("warehouse_processing_agent", END)
+    graph.add_edge("warehouse_processing_agent", "package_assembly_agent")
+    graph.add_edge("package_assembly_agent", END)
 
     return graph.compile()
 
