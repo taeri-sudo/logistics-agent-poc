@@ -1,0 +1,7 @@
+{
+  "include": ["logistics_agent", "main.py"],
+  "venvPath": ".",
+  "venv": "venv",
+  "typeCheckingMode": "standard",
+  "reportTypedDictNotRequiredAccess": "none"
+}

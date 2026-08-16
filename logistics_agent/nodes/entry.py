@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import cast
 
 from logistics_agent.data.mock_profiles import MOCK_USER_PROFILES
 from logistics_agent.state import Address, GraphState, Item, OrderState
@@ -54,7 +55,7 @@ def _resolve_item_addresses(
             if not addr_id:
                 addr_id = f"ADDR-{uuid.uuid4().hex[:6].upper()}"
                 inline_ids[key] = addr_id
-                used.setdefault(addr_id, {**inline, "address_id": addr_id})
+                used.setdefault(addr_id, cast(Address, {**inline, "address_id": addr_id}))
         else:
             addr_id = default_id
             if default_id in book:

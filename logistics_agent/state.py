@@ -1,4 +1,4 @@
-"""State 스키마 v11 — LangGraph GraphState 정의."""
+"""State 스키마 v12 — LangGraph GraphState 정의."""
 
 from __future__ import annotations
 
@@ -23,8 +23,24 @@ class Address(TypedDict):
 
 
 class PaymentMethod(TypedDict):
-    type: str
-    last4: str | None
+    type: str  # card / bank_transfer 등
+    last4: str | None  # 카드가 아니면 None
+
+
+class Location(TypedDict):
+    """창고 내 물리 위치. 포장 전까지만 유효."""
+
+    zone: str
+    shelf: str
+    bin: str
+
+
+class GpsPoint(TypedDict):
+    """출고 이후 Package의 현재 위치."""
+
+    lat: float
+    lng: float
+    updated_at: str
 
 
 class UserProfile(TypedDict):
@@ -40,7 +56,7 @@ class Item(TypedDict):
     item_delay_reason: ItemDelayReason | None
     package_ref: str | None
     delivery_address_id: str  # Order.delivery_addresses 중 하나를 참조
-    location: dict | None
+    location: Location | None
     customer_facing_status: CustomerFacingStatus
 
 
@@ -61,7 +77,7 @@ class PackageState(TypedDict):
     delivery_address_id: str  # 이 패키지의 배송지 (미봉인 패키지 재사용 시 매칭 키)
     required_item_count: int
     arrived_item_count: int
-    current_gps: dict | None
+    current_gps: GpsPoint | None
     tracking_number: str | None
     delay_categories: list[str]
     policy_version_applied: str | None

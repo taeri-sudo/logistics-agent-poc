@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import cast
 
-from logistics_agent.state import GraphState, Item, PackageState, SourceItemRef
+from logistics_agent.state import GraphState, Item, OrderState, PackageState, SourceItemRef
 
 # 창고에 집화된(=패키지에 도착한) 것으로 보는 item_status. "대기"/"피킹중"은 미도착.
 ARRIVED_ITEM_STATUSES = frozenset(
@@ -80,9 +81,12 @@ def package_assembly_agent(state: GraphState) -> GraphState:
         for idx in indexes:
             item = item_list[idx]
             new_refs.append({"order_id": order_id, "item_id": item["item_id"]})
-            item_list[idx] = {**item, "package_ref": package["package_id"]}
+            item_list[idx] = cast(Item, {**item, "package_ref": package["package_id"]})
 
-        packages[pos] = {**package, "source_items": [*package["source_items"], *new_refs]}
+        packages[pos] = cast(
+            PackageState,
+            {**package, "source_items": [*package["source_items"], *new_refs]},
+        )
 
         print(
             f"  [그룹] address_id={address_id} items={len(indexes)} "
@@ -104,20 +108,26 @@ def package_assembly_agent(state: GraphState) -> GraphState:
             if (found := _find_item(item_list, order_id, ref)) is not None
             and found["item_status"] in ARRIVED_ITEM_STATUSES
         )
-        package = {
-            **package,
-            "required_item_count": required,
-            "arrived_item_count": arrived,
-            "last_checked_at": now,
-        }
+        package = cast(
+            PackageState,
+            {
+                **package,
+                "required_item_count": required,
+                "arrived_item_count": arrived,
+                "last_checked_at": now,
+            },
+        )
 
         if required > 0 and required == arrived:
             # 봉인: tracking_number 발급. item_status "포장완료" 전이는 포장agent 몫
-            package = {
-                **package,
-                "tracking_number": f"TRK-{uuid.uuid4().hex[:12].upper()}",
-                "join_waiting_since": None,
-            }
+            package = cast(
+                PackageState,
+                {
+                    **package,
+                    "tracking_number": f"TRK-{uuid.uuid4().hex[:12].upper()}",
+                    "join_waiting_since": None,
+                },
+            )
             sealed += 1
             print(
                 f"  [봉인] {package['package_id']} required={required} arrived={arrived} "
@@ -126,7 +136,7 @@ def package_assembly_agent(state: GraphState) -> GraphState:
         else:
             # 대기: 첫 대기 시각을 보존한다 (무한대기 판정은 3단계 지연체크게이트 몫)
             if package["join_waiting_since"] is None:
-                package = {**package, "join_waiting_since": now}
+                package = cast(PackageState, {**package, "join_waiting_since": now})
             waiting += 1
             print(
                 f"  [대기] {package['package_id']} required={required} arrived={arrived} "
@@ -137,11 +147,14 @@ def package_assembly_agent(state: GraphState) -> GraphState:
 
     # TODO(4단계): 파생값 재계산은 추적agent로 이관. 지금은 잠정 세팅
     all_sealed = bool(packages) and all(pkg["tracking_number"] for pkg in packages)
-    order = {
-        **order,
-        "item_list": item_list,
-        "internal_order_status": "출고준비" if all_sealed else "조립중",
-    }
+    order = cast(
+        OrderState,
+        {
+            **order,
+            "item_list": item_list,
+            "internal_order_status": "출고준비" if all_sealed else "조립중",
+        },
+    )
 
     print(f"[패키지조립agent] 완료 - 패키지 {len(packages)}개 (봉인 {sealed}, 대기 {waiting})")
     return {"order": order, "packages": packages}

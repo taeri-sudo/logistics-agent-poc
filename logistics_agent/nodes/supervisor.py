@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from logistics_agent.state import GraphState
+from typing import cast
+
+from logistics_agent.state import GraphState, OrderState
 
 
 def supervisor(state: GraphState) -> GraphState:
@@ -16,7 +18,7 @@ def supervisor(state: GraphState) -> GraphState:
 
     print(f"[Supervisor] decision={decision}, notes={notes}")
 
-    order = {**order, "internal_order_status": "창고처리중"}
+    order = cast(OrderState, {**order, "internal_order_status": "창고처리중"})
     return {
         "supervisor_decision": decision,
         "supervisor_notes": notes,

@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
-from logistics_agent.state import GraphState
+from collections.abc import Mapping
+from typing import cast
+
+from logistics_agent.state import GraphState, OrderState
 
 
-def _is_valid_address(address: dict) -> bool:
+def _is_valid_address(address: Mapping[str, object]) -> bool:
+    """필수 필드가 실제로 채워졌는지 검사.
+
+    Address가 아닌 Mapping으로 받는 이유: 이 함수는 "키가 누락됐을 수 있는 데이터"를 검사하는데,
+    Address는 total=True라 모든 키가 있다고 단언한다. 타입을 Address로 좁히면 검사 자체가 자기모순이 되고,
+    동적 키 조회(`.get(field)`)도 TypedDict에선 리터럴 키만 허용돼 막힌다.
+    """
     required = ("recipient", "phone", "postal_code", "address_line")
     return all(address.get(field) for field in required)
 
@@ -43,7 +52,7 @@ def order_validation_agent(state: GraphState) -> GraphState:
     }
 
     if not passed:
-        order = {**order, "internal_order_status": "검증실패"}
+        order = cast(OrderState, {**order, "internal_order_status": "검증실패"})
         updates["order"] = order
 
     return updates
