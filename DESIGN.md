@@ -151,6 +151,30 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
   것을 확인. 다만 두 패키지가 같은 틱에 나란히 전진한 것은 lockstep 단순화(POC 단순화 4번) 때문 —
   실제로는 각기 다른 시점에 이벤트를 받아야 한다.
 
+### 4단계 후속: mock_carrier_signal / 추적agent 분리
+
+처음 구현한 추적agent는 "이벤트 시뮬레이션"과 "파생값 판단"을 한 노드에 합쳐놓은 상태였다.
+DESIGN.md 노드 목록이 원래 정의한 추적agent의 역할은 "상태변화 신호를 **받아서** 파생값을
+재계산"하는 것이지, 신호 자체를 만들어내는 게 아니다 — 그래서 둘을 분리했다.
+
+- **`mock_carrier_signal`(액션, POC 전용)**: 봉인된 Package를 `포장완료→출고됨→배송중→배송완료`
+  고정 시퀀스로 한 틱씩 전진시키고 GPS placeholder를 채운다. 함수명에 "mock"을 명시하고
+  docstring에 "실제 서비스에서는 이 자리에 택배사 웹훅/Kafka 이벤트가 들어온다"고 못박아뒀다 —
+  "확장 지점" 섹션이 이미 예고했던 "간단한 신호 발생기"가 바로 이것.
+- **`추적agent`(판단+반복, 원래 의도로 축소)**: 신호를 만들지 않는다. 현재 `item_status`/
+  `delay_categories`만 보고 `customer_facing_status`/`internal_order_status`를 재계산하고,
+  배송완료 도달 여부만 판단해서 라우팅한다(도달 시 END, 아니면 mock_carrier_signal로 재진입).
+  종료 여부를 별도 bool 필드로 남기지 않은 이유는 기존 파생 원칙과 동일 — `item_status`에서
+  이미 계산 가능한 값이라 필드로 만들지 않았다.
+- **의도적으로 2-노드 순환(mock_carrier_signal ↔ 추적agent)을 만들었다** — 이건 3단계에서
+  "조립대기게이트↔패키지조립agent 2노드 사이클보다 단일노드 self-loop을 선호"한 결정과
+  겉보기엔 반대다. 다른 이유가 있다: 3단계의 게이트/조립agent는 **같은 내부 시스템**이 하는
+  두 가지 역할이라 억지로 나눌 이유가 없었지만, 여기서는 mock_carrier_signal이 **외부 시스템
+  (캐리어)을 흉내 낸 자리**라 추적agent(내부 판단)와 개념적으로 다른 행위자다. 나중에
+  mock_carrier_signal을 실제 웹훅 핸들러로 갈아끼울 때 추적agent 코드는 안 건드려도 되게
+  하려면, 지금부터 그래프 구조로도 분리해두는 게 맞다고 판단했다.
+- 노드 목록 분류: mock_carrier_signal=액션, 추적agent=판단+반복 (기존 "통합"에서 재분류).
+
 ---
 
 ## 핵심 설계 원칙 (State 설계 시 계속 지켜온 기준)
@@ -195,11 +219,12 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
 | 판단+반복 | 출고전게이트 | self-loop 조건분기 | Item 기반. `item_delay_reason` 있는 item만 대상, 해소되면 피킹완료 확정, 미해소면 자기루프, retry_count 초과시 item escalated=true |
 | 판단+반복 | 조립대기게이트 | self-loop 조건분기 (순수 워처) | 미봉인 Package(`tracking_number is None`) 기반. 스스로 해소하지 않고 감시만 함 — 실제 해소는 출고전게이트+패키지조립agent 재봉인으로 일어남. retry_count 초과시 package escalated=true |
 | 판단+반복 | 배송중게이트 | self-loop 조건분기 | 봉인된 Package(`tracking_number` 있음) 기반. `delay_categories` 체크(외부신호/폴링 데모는 고정 매핑), 자연재해는 재시도 없이 즉시 escalated=true, 그 외 지연은 retry_count 초과시 escalated=true |
-| 통합 | 추적agent | 이벤트 수신 + 파생 재계산 | 모든 상태변화 신호(로봇완료, 물류사API, GPS 등) 수신 → 원본 필드 갱신 → 그 자리에서 Order 파생값(internal_order_status, customer_facing_status)도 재계산. (구 이벤트핸들러+상태집계agent 통합) |
+| 액션 | mock_carrier_signal | 액션 (POC 전용 신호 발생기) | 봉인된 Package를 `포장완료→출고됨→배송중→배송완료` 고정 시퀀스로 전진시키고 GPS placeholder 채움. 실제 서비스에서는 택배사 웹훅/Kafka 이벤트가 이 자리를 대체 |
+| 판단+반복 | 추적agent | self-loop 조건분기 + 파생 재계산 | 신호를 만들지 않고 현재 item_status/delay_categories만 보고 Order 파생값(internal_order_status, customer_facing_status) 재계산, 배송완료 도달 여부 판단 → 도달시 종료, 아니면 mock_carrier_signal로 재진입 |
 | 부가 | 알림agent | 조건부 발송 (비차단) | notification_enabled 확인 후 notification_log에 기록. 워크플로우를 막지 않음 |
 
 **구현 현황**: UserProfile조회 / 주문요청 / 주문검증 / Supervisor(더미) / 창고처리 / 출고전게이트 / 패키지조립 /
-포장 / 조립대기게이트 / 배송중게이트 / 추적agent = 구현됨(`logistics_agent/nodes/`).
+포장 / 조립대기게이트 / 배송중게이트 / mock_carrier_signal / 추적agent = 구현됨(`logistics_agent/nodes/`).
 알림agent = **설계만 있고 코드 없음** (다음 단계).
 
 ### 제거/통합된 것들 (설계 과정에서 폐기 — 이유 포함)
@@ -341,9 +366,19 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
 - 출고전게이트가 여전히 창고처리agent 대신 item_status를 직접 확정한다 (POC 단순화 1번) — 창고처리agent
   재진입성 리팩터는 4단계에서도 의도적으로 보류, 다음 단계 후보
 - 알림agent 미착수 — notification_enabled/notification_log 필드는 이미 있음
+- `ItemStatus`의 `"피킹중"`, `"배송지연"`은 실제로 세팅하는 코드가 어디에도 없는 죽은 enum 값이다
+  (창고처리agent는 대기→피킹완료로 바로 건너뛰고, "배송지연"은 아예 아무도 대입하지 않음).
+  특히 `"배송지연"`은 이미 `item_delay_reason`(재고부족/검수불량/파손)이 지연 사유를 표현하고 있어서
+  중복 개념일 가능성이 있다 — item_status에 별도 값으로 둘지, item_delay_reason 유무로만 판단할지
+  정리 필요
+- `tracking.py`의 `_SHIP_SEQUENCE`와 `_CUSTOMER_FACING_MAP`은 서로 암묵적으로 동기화돼야 하는
+  두 자료구조다 (`_SHIP_SEQUENCE`의 각 값이 `_CUSTOMER_FACING_MAP`의 키와 정확히 일치해야 함).
+  지금은 둘 다 4개로 손으로 맞춰놔서 안전하지만, 나중에 배송 단계를 추가하면서 한쪽만 갱신하면
+  `_CUSTOMER_FACING_MAP[next_status]`에서 `KeyError`(fallback 없는 직접 subscript)로 즉시 죽는다.
+  `list[tuple[str, str]]`(상태, 매핑값) 하나로 합쳐 애초에 동기화 이슈 자체를 없애는 개선안이 있음
 
 ## 확장 지점 (지금 범위 밖, 문서에만 남김)
-- Kafka/Confluent/ClickHouse 등 실제 스트리밍 인프라 — POC에서는 간단한 신호 발생기로 대체 예정
+- Kafka/Confluent/ClickHouse 등 실제 스트리밍 인프라 — POC에서는 간단한 신호 발생기(`mock_carrier_signal`)로 대체함
 - Unity Catalog류 거버넌스 계층 — Neo4j(온톨로지)와는 별개로, 데이터/툴 접근 통제용으로 향후 고려
 - 취소 워크플로우 (cancel_requested_at/cancel_status는 필드만 존재, 처리 흐름 미구현)
 - 사용자 endpoint "도킹" 개념 (사이트별 프로필 스키마를 표준 캡슐로 변환하는 어댑터) — 현재 기술로 완전 표준화 어려움, 개념만 남김

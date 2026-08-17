@@ -1,5 +1,5 @@
 """LangGraph 최소 골격 — UserProfile → 주문요청 → 검증 → Supervisor → 창고처리
-→ 출고전게이트 → 패키지조립 → 포장 → 조립대기게이트 → 배송중게이트 → 추적."""
+→ 출고전게이트 → 패키지조립 → 포장 → 조립대기게이트 → 배송중게이트 → mock_carrier_signal → 추적."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from logistics_agent.nodes.delay_gates import (
 from logistics_agent.nodes.entry import order_request_agent, user_profile_lookup
 from logistics_agent.nodes.packaging import packaging_agent
 from logistics_agent.nodes.supervisor import supervisor
-from logistics_agent.nodes.tracking import route_after_tracking, tracking_agent
+from logistics_agent.nodes.tracking import mock_carrier_signal, route_after_tracking, tracking_agent
 from logistics_agent.nodes.validation import order_validation_agent, route_after_validation
 from logistics_agent.nodes.warehouse import warehouse_processing_agent
 from logistics_agent.state import GraphState
@@ -36,6 +36,7 @@ def build_graph():
     graph.add_node("packaging_agent", packaging_agent)
     graph.add_node("assembly_wait_gate", assembly_wait_gate)
     graph.add_node("in_transit_delay_gate", in_transit_delay_gate)
+    graph.add_node("mock_carrier_signal", mock_carrier_signal)
     graph.add_node("tracking_agent", tracking_agent)
 
     graph.add_edge(START, "user_profile_lookup")
@@ -63,12 +64,13 @@ def build_graph():
     graph.add_conditional_edges(
         "in_transit_delay_gate",
         route_after_in_transit_gate,
-        {"retry": "in_transit_delay_gate", "proceed": "tracking_agent"},
+        {"retry": "in_transit_delay_gate", "proceed": "mock_carrier_signal"},
     )
+    graph.add_edge("mock_carrier_signal", "tracking_agent")
     graph.add_conditional_edges(
         "tracking_agent",
         route_after_tracking,
-        {"retry": "tracking_agent", "proceed": END},
+        {"retry": "mock_carrier_signal", "proceed": END},
     )
 
     return graph.compile()
