@@ -104,7 +104,7 @@ def order_request_agent(state: GraphState) -> GraphState:
         "order_created_at": now,
         "delivery_addresses": delivery_addresses,
         "payment_status": payment_status,
-        "split_delivery_preference": False,
+        "split_delivery_preference": state.get("split_delivery_preference_hint", False),
         "cancel_requested_at": None,
         "cancel_status": None,
         "internal_order_status": "접수",

@@ -119,6 +119,7 @@ class GraphState(TypedDict, total=False):
     user_id: str
     confirmed_order_items: list[dict]
     payment_status_hint: PaymentStatus  # 주문 생성 시 payment_status (데모/외부결제 연동용)
+    split_delivery_preference_hint: bool  # 주문 생성 시 split_delivery_preference (데모용, 기본 False)
 
     # UserProfile (조회 전용 캡슐)
     user_profile: UserProfile

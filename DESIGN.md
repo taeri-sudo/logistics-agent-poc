@@ -15,6 +15,7 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
 - [x] 2단계: 패키지조립agent (배송지 정규화 v11 + 중첩구조 타입 승격 v12)
 - [x] 3단계: 지연체크게이트 3종 (출고전/조립대기/배송중, self-loop 패턴, Item에 retry 필드 추가 v13)
 - [x] 4단계: 추적agent (범용 이벤트 수신 + 파생값 재계산) — 선행 조건으로 포장agent도 함께 구현
+- [x] 4단계 후속: split_delivery_preference를 패키지조립agent 그룹핑에 실제 반영, 시나리오9로 검증 완료
 
 ## 1단계 실행 결과 요약
 - 시나리오1 (payment_status=대기): 검증 실패 → internal_order_status="검증실패", Supervisor 미진입 확인됨
@@ -175,6 +176,21 @@ DESIGN.md 노드 목록이 원래 정의한 추적agent의 역할은 "상태변�
   하려면, 지금부터 그래프 구조로도 분리해두는 게 맞다고 판단했다.
 - 노드 목록 분류: mock_carrier_signal=액션, 추적agent=판단+반복 (기존 "통합"에서 재분류).
 
+### 4단계 후속: split_delivery_preference를 그룹핑에 실제 반영
+
+`OrderState.split_delivery_preference` 필드는 2단계부터 스키마에 있었지만 entry.py가
+항상 `False`로 하드코딩해서 죽은 값이었다. 이번에 두 가지를 연결했다:
+
+- **입력 경로**: `GraphState`에 `split_delivery_preference_hint`를 추가해 `payment_status_hint`와
+  같은 패턴으로 데모에서 켤 수 있게 함 (entry.py가 `state.get(...)`으로 읽어 그대로 Order에 반영).
+- **실제 반영 지점**: 패키지조립agent의 그룹핑 키를 `(delivery_address_id, split이면 item_id도)`
+  튜플로 바꿔, `true`면 같은 배송지라도 item마다 별도 Package가 되도록 함. 미봉인 패키지 "합류"
+  탐색도 `split_pref`일 땐 항상 건너뛰어 다른 item의 패키지에 잘못 합류하지 않게 했다.
+- 시나리오9(같은 배송지 item 2개, `split_delivery_preference_hint=true`)로 검증 — 두 item이
+  각각 독립된 Package로 봉인되고(서로 다른 tracking_number), 끝까지 개별적으로 배송완료에
+  도달하는 것을 확인. 시나리오3(기본값 `false`)은 여전히 같은 배송지 item들을 한 Package로
+  묶어 회귀가 없음을 재확인.
+
 ---
 
 ## 핵심 설계 원칙 (State 설계 시 계속 지켜온 기준)
@@ -214,7 +230,7 @@ DESIGN.md 노드 목록이 원래 정의한 추적agent의 역할은 "상태변�
 | 관문 | 주문검증agent | 조건분기 | payment_status, 배송지 검증 → 통과/실패 |
 | 판단 | Supervisor | LLM 판단 | 온톨로지/규칙으로 못 정하는 예외만 처리 (물체 취급주의 판단, 지연 대응 판단 등). 호출 시 decision_type + payload 구조로 여러 판단 종류를 분기 |
 | 반복 | 창고처리agent | 조회+액션 (내장 루프) | item_list 순회, Sensor(위치확인)→Action(피킹). 정상 케이스는 온톨로지 조회로 처리, 예외만 Supervisor 호출 |
-| 집계 | 패키지조립agent | 조건카운트 | `package_ref`가 없는 item을 `delivery_address_id` 기준으로 묶음. 같은 배송지의 미봉인 패키지가 있으면 합류. required/arrived count 체크, 충족시 봉인+tracking_number 발급. (구 Join노드 흡수) |
+| 집계 | 패키지조립agent | 조건카운트 | `package_ref`가 없는 item을 `delivery_address_id` 기준으로 묶음(`split_delivery_preference=true`면 같은 배송지도 item별로 분리). 같은 배송지의 미봉인 패키지가 있으면 합류(분리배송이면 항상 신규). required/arrived count 체크, 충족시 봉인+tracking_number 발급. (구 Join노드 흡수) |
 | 액션 | 포장agent | 액션 | 포장 완료 처리 (Package 단위 일괄, "포장중" 중간상태는 item 레벨엔 없음) |
 | 판단+반복 | 출고전게이트 | self-loop 조건분기 | Item 기반. `item_delay_reason` 있는 item만 대상, 해소되면 피킹완료 확정, 미해소면 자기루프, retry_count 초과시 item escalated=true |
 | 판단+반복 | 조립대기게이트 | self-loop 조건분기 (순수 워처) | 미봉인 Package(`tracking_number is None`) 기반. 스스로 해소하지 않고 감시만 함 — 실제 해소는 출고전게이트+패키지조립agent 재봉인으로 일어남. retry_count 초과시 package escalated=true |
@@ -237,7 +253,7 @@ DESIGN.md 노드 목록이 원래 정의한 추적agent의 역할은 "상태변�
 
 ---
 
-## State 스키마 (v13)
+## State 스키마 (v14)
 
 > v10 → v11 변경: 배송지 정규화. `Address.address_id` 신설, `UserProfile.delivery_address`/`Order.delivery_address`(단수) → `delivery_addresses`(list),
 > `Item.delivery_address_id`(참조) 추가, `Package.delivery_address_id` 추가. 원칙 5(한 주문이 여러 배송지로 쪼개짐)를 스키마로 실제 지원하기 위함.
@@ -257,8 +273,14 @@ DESIGN.md 노드 목록이 원래 정의한 추적agent의 역할은 "상태변�
 > 패키지는 0이 아닌 값을 들고 올 수 있어 추적agent가 이어 쓰면 두 노드의 의미가 충돌한다. 대신
 > `item_status` 값 자체(포장완료→출고됨→배송중→배송완료)가 진행 카운터를 겸하도록 설계해 새
 > 필드 없이 해결했다.
+>
+> v13 → v14 변경: **`GraphState`에 `split_delivery_preference_hint: bool` 입력 필드 신설.**
+> `OrderState.split_delivery_preference` 자체는 2단계부터 있었지만 entry.py가 항상 `False`로
+> 하드코딩해서 죽은 값이었다 — 이번에 패키지조립agent 그룹핑에 실제로 연결하면서, `payment_status_hint`와
+> 같은 패턴으로 데모에서 켤 수 있는 입력 경로가 필요해졌다. `OrderState`/`Item`/`PackageState` 자체는
+> 변경 없음, `GraphState` 최상위 입력 키 추가만 있는 변경.
 
-> GraphState 최상위 키: `user_id` / `confirmed_order_items` / `payment_status_hint`(진입 입력),
+> GraphState 최상위 키: `user_id` / `confirmed_order_items` / `payment_status_hint` / `split_delivery_preference_hint`(진입 입력),
 > `user_profile`, `order`, **`packages: list[PackageState]`**, `validation_passed` / `validation_errors`, `supervisor_decision` / `supervisor_notes`.
 > Package는 Order 안이 아니라 **최상위**에 있다 — 원칙 5(Order-Package는 1:N)를 State 구조로 지킨 것.
 
@@ -275,10 +297,10 @@ DESIGN.md 노드 목록이 원래 정의한 추적agent의 역할은 "상태변�
 | order_created_at | timestamp | |
 | delivery_addresses | list[Address] | 이 주문의 item들이 실제 참조하는 배송지만. UserProfile 주소록 참조 + 주문 시점 신규주소 |
 | payment_status | string(enum) | 대기/완료/실패 |
-| split_delivery_preference | bool | 생성 시 확정, 이후 불변 (스냅샷 불필요) |
+| split_delivery_preference | bool | 생성 시 확정, 이후 불변 (스냅샷 불필요). entry.py가 `split_delivery_preference_hint` 입력을 그대로 반영. **assembly.py의 그룹핑 키에 실제로 반영됨 (v14)** — true면 같은 배송지도 item별 별도 Package |
 | cancel_requested_at | timestamp/null | |
 | cancel_status | string(enum)/null | 요청됨/처리중/완료/거부됨 |
-| internal_order_status | string(enum) | 파생값. 최종 소유자는 추적agent(4단계). 현재는 각 노드가 잠정 세팅(검증실패/창고처리중/조립중/출고준비) |
+| internal_order_status | string(enum) | 파생값. 최종 소유자는 추적agent — `derive_internal_order_status()` (tracking.py), 패키지조립agent도 같은 함수를 import해서 씀 |
 | item_list | list[Item] | 아래 Item 참고 |
 | current_item_index | int | 창고처리agent 순회 위치 |
 | notification_enabled | bool | 현재 설정값 (UserProfile에서 복사) |
@@ -365,17 +387,34 @@ DESIGN.md 노드 목록이 원래 정의한 추적agent의 역할은 "상태변�
 - 온톨로지(Neo4j) 스키마는 "워크플로우가 필요로 하는 만큼만" 상향식으로 만들기로 함 — 아직 미착수
 - 출고전게이트가 여전히 창고처리agent 대신 item_status를 직접 확정한다 (POC 단순화 1번) — 창고처리agent
   재진입성 리팩터는 4단계에서도 의도적으로 보류, 다음 단계 후보
-- 알림agent 미착수 — notification_enabled/notification_log 필드는 이미 있음
-- `ItemStatus`의 `"피킹중"`, `"배송지연"`은 실제로 세팅하는 코드가 어디에도 없는 죽은 enum 값이다
-  (창고처리agent는 대기→피킹완료로 바로 건너뛰고, "배송지연"은 아예 아무도 대입하지 않음).
-  특히 `"배송지연"`은 이미 `item_delay_reason`(재고부족/검수불량/파손)이 지연 사유를 표현하고 있어서
-  중복 개념일 가능성이 있다 — item_status에 별도 값으로 둘지, item_delay_reason 유무로만 판단할지
-  정리 필요
+- 알림agent 미착수 — notification_enabled 필드는 이미 있음 (notification_log 관련은 아래
+  "미구현/죽은 필드 종합" 참고)
 - `tracking.py`의 `_SHIP_SEQUENCE`와 `_CUSTOMER_FACING_MAP`은 서로 암묵적으로 동기화돼야 하는
   두 자료구조다 (`_SHIP_SEQUENCE`의 각 값이 `_CUSTOMER_FACING_MAP`의 키와 정확히 일치해야 함).
   지금은 둘 다 4개로 손으로 맞춰놔서 안전하지만, 나중에 배송 단계를 추가하면서 한쪽만 갱신하면
   `_CUSTOMER_FACING_MAP[next_status]`에서 `KeyError`(fallback 없는 직접 subscript)로 즉시 죽는다.
   `list[tuple[str, str]]`(상태, 매핑값) 하나로 합쳐 애초에 동기화 이슈 자체를 없애는 개선안이 있음
+
+## 미구현/죽은 필드 종합
+
+스키마엔 있지만 실제로는 아무도 채우지 않거나, 채워져도 아무도 읽지 않는 필드들. 여러 대화에서
+따로따로 발견된 걸 여기 한곳에 모았다 — 새 필드를 스키마에 추가하기 전에 먼저 여기부터 확인할 것.
+
+1. **`ItemStatus`의 `"피킹중"`, `"배송지연"`** — 실제로 이 값을 세팅하는 코드가 어디에도 없는
+   죽은 enum 값이다. 창고처리agent는 "대기"→"피킹완료"로 바로 건너뛰고, "배송지연"은 아예 아무도
+   대입하지 않는다. 특히 "배송지연"은 이미 `item_delay_reason`(재고부족/검수불량/파손)이 지연
+   사유를 표현하고 있어서 중복 개념일 가능성이 있다.
+   **구현 시점 예상**: "피킹중"은 창고처리agent 재진입성 리팩터(POC 단순화 1번) 시 진행중 상태
+   표시가 필요해지면 채워질 후보. "배송지연"은 item_delay_reason과의 관계를 온톨로지 단계에서
+   정리하면서 (별도 값으로 유지할지, item_delay_reason 유무로만 판단하고 아예 제거할지 결정).
+2. **`NotificationEntry`(`notification_log`)** — `package_assembly_agent`의 `_new_package`가
+   빈 리스트로 초기화만 하고, 실제로 항목을 append하는 코드는 어디에도 없다. 알림agent가
+   미구현이라 당연한 결과.
+   **구현 시점 예상**: 알림agent 구현 시.
+3. **`trace_id`** — 다른 둘과는 성격이 다르다. entry.py가 `uuid.uuid4().hex`로 값 자체는
+   채우지만(완전히 죽은 필드는 아님), 그 값을 실제로 참조/활용하는 코드는 어디에도 없다 —
+   LangSmith 같은 관측성 연동이 없어서 "쓰기만 하고 아무도 안 읽는" 상태.
+   **구현 시점 예상**: 관측성/LangSmith 연동 시.
 
 ## 확장 지점 (지금 범위 밖, 문서에만 남김)
 - Kafka/Confluent/ClickHouse 등 실제 스트리밍 인프라 — POC에서는 간단한 신호 발생기(`mock_carrier_signal`)로 대체함

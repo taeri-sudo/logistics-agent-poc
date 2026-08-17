@@ -199,6 +199,32 @@ def run_demo() -> None:
     )
     _print_result(result_full_cycle)
 
+    print()
+    print("=" * 60)
+    print("시나리오 9: split_delivery_preference=true → 같은 배송지도 item별 별도 Package")
+    print("=" * 60)
+    result_split_pref = app.invoke(
+        {
+            "user_id": "user-001",
+            "confirmed_order_items": [
+                {
+                    "item_id": "SKU-301",
+                    "delivery_address_id": "ADDR-HOME",
+                    "location": {"zone": "A", "shelf": "01", "bin": "01"},
+                },
+                {
+                    # split_delivery_preference=true라 SKU-301과 배송지가 같아도 별도 Package로 분리돼야 함
+                    "item_id": "SKU-302",
+                    "delivery_address_id": "ADDR-HOME",
+                    "location": {"zone": "A", "shelf": "01", "bin": "02"},
+                },
+            ],
+            "payment_status_hint": "완료",
+            "split_delivery_preference_hint": True,
+        }
+    )
+    _print_result(result_split_pref)
+
 
 def _print_result(state: dict) -> None:
     order = state.get("order", {})
@@ -210,6 +236,7 @@ def _print_result(state: dict) -> None:
             "order_id": order.get("order_id"),
             "internal_order_status": order.get("internal_order_status"),
             "payment_status": order.get("payment_status"),
+            "split_delivery_preference": order.get("split_delivery_preference"),
             "delivery_addresses": [
                 {"address_id": addr["address_id"], "address_line": addr["address_line"]}
                 for addr in order.get("delivery_addresses", [])

@@ -55,22 +55,36 @@ def package_assembly_agent(state: GraphState) -> GraphState:
     # 아직 package_ref가 없는 item만 수집 (이미 배정된 건 스킵 — 재진입 멱등성)
     unassigned = [(idx, item) for idx, item in enumerate(item_list) if item["package_ref"] is None]
 
-    print(f"[패키지조립agent] 시작 미배정={len(unassigned)}, 기존패키지={len(packages)}")
+    # split_delivery_preference=true면 같은 배송지라도 item마다 별도 Package로 분리
+    split_pref = order["split_delivery_preference"]
 
-    # 배송지별 그룹핑 (dict 삽입순서 = 최초 등장 순서)
-    groups: dict[str, list[int]] = {}
+    print(
+        f"[패키지조립agent] 시작 미배정={len(unassigned)}, 기존패키지={len(packages)}, "
+        f"split_delivery_preference={split_pref}"
+    )
+
+    # 배송지(+분리배송이면 item_id도)별 그룹핑 (dict 삽입순서 = 최초 등장 순서)
+    groups: dict[tuple[str, str], list[int]] = {}
     for idx, item in unassigned:
-        groups.setdefault(item["delivery_address_id"], []).append(idx)
+        address_id = item["delivery_address_id"]
+        group_key = (address_id, item["item_id"] if split_pref else "")
+        groups.setdefault(group_key, []).append(idx)
 
-    for address_id, indexes in groups.items():
-        # 같은 배송지의 미봉인 패키지가 있으면 합류, 없으면 신규 생성
-        pos = next(
-            (
-                i
-                for i, pkg in enumerate(packages)
-                if pkg["tracking_number"] is None and pkg["delivery_address_id"] == address_id
-            ),
-            None,
+    for group_key, indexes in groups.items():
+        address_id = group_key[0]
+        # 같은 배송지의 미봉인 패키지가 있으면 합류, 없으면 신규 생성.
+        # 분리배송이면 항상 신규 — 다른 item의 미봉인 패키지에 합류하면 안 됨.
+        pos = (
+            None
+            if split_pref
+            else next(
+                (
+                    i
+                    for i, pkg in enumerate(packages)
+                    if pkg["tracking_number"] is None and pkg["delivery_address_id"] == address_id
+                ),
+                None,
+            )
         )
         if pos is None:
             packages.append(_new_package(address_id, now))
