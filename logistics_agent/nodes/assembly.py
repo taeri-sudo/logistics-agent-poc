@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import cast
 
+from logistics_agent.nodes.tracking import derive_internal_order_status
 from logistics_agent.state import GraphState, Item, OrderState, PackageState, SourceItemRef
 
 # 창고에 집화된(=패키지에 도착한) 것으로 보는 item_status. "대기"/"피킹중"은 미도착.
@@ -147,14 +148,12 @@ def package_assembly_agent(state: GraphState) -> GraphState:
 
         packages[pos] = package
 
-    # TODO(4단계): 파생값 재계산은 추적agent로 이관. 지금은 잠정 세팅
-    all_sealed = bool(packages) and all(pkg["tracking_number"] for pkg in packages)
     order = cast(
         OrderState,
         {
             **order,
             "item_list": item_list,
-            "internal_order_status": "출고준비" if all_sealed else "조립중",
+            "internal_order_status": derive_internal_order_status(item_list, packages),
         },
     )
 

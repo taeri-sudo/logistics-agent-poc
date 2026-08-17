@@ -169,6 +169,36 @@ def run_demo() -> None:
     )
     _print_result(result_disaster)
 
+    print()
+    print("=" * 60)
+    print("시나리오 8: 포장agent+추적agent 풀 사이클 (배송지 2곳, 지연 없음) → 완료")
+    print("=" * 60)
+    result_full_cycle = app.invoke(
+        {
+            "user_id": "user-001",
+            "confirmed_order_items": [
+                {
+                    "item_id": "SKU-201",
+                    "delivery_address_id": "ADDR-HOME",
+                    "location": {"zone": "A", "shelf": "01", "bin": "01"},
+                },
+                {
+                    # 주소록에 없는 신규주소 → ADDR-OFFICE와 달리 고정 지연신호 안 붙음(진짜 무지연 확인용)
+                    "item_id": "SKU-202",
+                    "delivery_address": {
+                        "recipient": "홍길순",
+                        "phone": "010-4444-5555",
+                        "postal_code": "35240",
+                        "address_line": "대전광역시 유성구 대학로 99",
+                    },
+                    "location": {"zone": "B", "shelf": "02", "bin": "02"},
+                },
+            ],
+            "payment_status_hint": "완료",
+        }
+    )
+    _print_result(result_full_cycle)
+
 
 def _print_result(state: dict) -> None:
     order = state.get("order", {})
@@ -193,6 +223,7 @@ def _print_result(state: dict) -> None:
                 "required_item_count": pkg["required_item_count"],
                 "arrived_item_count": pkg["arrived_item_count"],
                 "tracking_number": pkg["tracking_number"],
+                "current_gps": pkg["current_gps"],
                 "join_waiting_since": pkg["join_waiting_since"],
                 "delay_categories": pkg["delay_categories"],
                 "retry_count": pkg["retry_count"],

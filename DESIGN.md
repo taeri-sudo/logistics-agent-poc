@@ -14,7 +14,7 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
 - [x] 1단계: UserProfile조회 → 주문요청agent → 주문검증agent(조건분기) → Supervisor(더미) → 창고처리agent(placeholder)
 - [x] 2단계: 패키지조립agent (배송지 정규화 v11 + 중첩구조 타입 승격 v12)
 - [x] 3단계: 지연체크게이트 3종 (출고전/조립대기/배송중, self-loop 패턴, Item에 retry 필드 추가 v13)
-- [ ] 4단계: 추적agent (범용 이벤트 수신 + 파생값 재계산)
+- [x] 4단계: 추적agent (범용 이벤트 수신 + 파생값 재계산) — 선행 조건으로 포장agent도 함께 구현
 
 ## 1단계 실행 결과 요약
 - 시나리오1 (payment_status=대기): 검증 실패 → internal_order_status="검증실패", Supervisor 미진입 확인됨
@@ -92,6 +92,8 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
    확정까지 직접 떠맡았다 — 관측(판단)과 액션(피킹 확정)이 한 노드에 섞인 상태.
    4단계에서 창고처리agent가 "지연 해소된 item만 재피킹"할 수 있게 재진입 가능해지면,
    출고전게이트는 다시 순수 판단(해소 여부 체크)만 하고 액션은 창고처리agent로 돌려줘야 한다.
+   **(4단계 착수 시점에 재확인 — 이번 범위에서는 그대로 보류하기로 결정.** 추적agent 작업과
+   결합할 이유가 없어 별도 리팩터로 남겨둠.)
 2. **배송중게이트의 지연 감지가 실제 물류 신호가 아니라 `delivery_address_id` 기준 고정 매핑
    (`_PACKAGE_DELAY_SIGNAL`)이다.** 원래는 패키지 자체 속성(현재 위치, GPS, 배송 경로 등)이나
    물류사 API/GPS 폴링으로 지연을 감지해야 하는데, `package_id`가 데모 시점에 미리 알 수 없는
@@ -102,6 +104,52 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
    실제 타임아웃 판정에는 관여하지 않는다. 동기 실행되는 POC 데모에서는 벽시계 시간이 흐르지
    않아 tick 수로 대체할 수밖에 없었음 — 실제 서비스라면 폴링 주기 × 경과 tick 환산이나
    `datetime.now() - join_waiting_since`와 임계값 비교로 바꿔야 한다.
+4. **추적agent가 봉인된 패키지들을 lockstep으로 함께 전진시킨다.** 출고전게이트가 패키지조립agent
+   진입 전에 모든 지연을 이미 해소/에스컬레이션해버리므로, 한 번의 그래프 실행에서 봉인되는
+   패키지들은 전부 같은 시점에 추적agent 루프에 진입해 같은 틱마다 함께 한 단계씩 전진한다.
+   실제로는 캐리어마다, 패키지마다 이벤트 도착 시각이 다르므로 서로 다른 배송지의 두 패키지가
+   같은 틱에 항상 나란히 "배송중"이 되는 일은 없다. 온톨로지/실제 이벤트 연동 단계에서 패키지별
+   독립적인 이벤트 타이밍으로 대체해야 함.
+   **(원칙6 위반은 아님 — 패키지 간에 서로를 막는 의존성은 코드에 없다.** `tracking_agent`의
+   전진 판단은 오직 그 패키지 자신의 `item_status`만 본다. 먼저 끝난 패키지는 이후 틱에서
+   그냥 조용히 스킵될 뿐, 뒤처진 패키지가 앞선 패키지를 붙잡아두지 않는다. lockstep은 "봉인
+   시점 자체가 이번 POC에서는 항상 한 번에 뭉쳐서 발생한다"는 상류 타이밍의 결과일 뿐, 하류의
+   join/wait 구조가 아니다.)
+5. **`current_gps`가 실제 GPS 신호가 아니라 진행 단계(`_SHIP_SEQUENCE`의 index)로부터 계산한
+   고정 좌표다.** 창고처리agent의 기본 `Location`과 같은 성격의 placeholder — 실제로는 캐리어
+   GPS 폴링으로 채워져야 한다.
+6. **`derive_internal_order_status`가 패키지 하나라도 미봉인이면 order 전체를 "조립중"으로
+   뭉뚱그린다.** 다른 패키지가 이미 "배송완료"에 도달했어도 마찬가지다. `InternalOrderStatus`
+   enum에 "부분배송중"에 해당하는 값이 없다는 게 근본 원인 — 2~3단계부터 있던 all-or-nothing
+   판정 패턴을 4단계가 그대로 이어받았다. 지금까지의 데모 시나리오에는 "한 패키지는 끝까지
+   배송되고 다른 패키지는 영구 대기"인 조합이 없어서 이 gap이 드러난 적이 없었다. 온톨로지
+   단계에서 enum 재설계와 함께 다시 열어봐야 한다.
+
+## 4단계 실행 결과 요약
+
+추적agent 자체가 유일한 목표였지만, item_status enum상 "출고됨" 이후 이벤트는 논리적으로
+"포장완료"를 전제로 해서 포장agent도 함께 구현했다 (사용자와 확인 후 범위 확장).
+파이프라인은 `... → 패키지조립agent → 포장agent → 조립대기게이트 → 배송중게이트 → 추적agent`.
+
+- **추적agent도 게이트와 같은 self-loop 뼈대를 재사용하되, `retry_count`/`escalated`는 쓰지
+  않는다.** 게이트들은 "지연이 해소되길 기다리는" 판단이라 재시도 횟수·에스컬레이션이 의미
+  있지만, 추적agent는 "정해진 이벤트 시퀀스(포장완료→출고됨→배송중→배송완료)를 그냥 진행시키는"
+  것이라 실패/타임아웃 개념이 없다. 대신 **`item_status` 값 자체가 진행 카운터** 역할을 한다 —
+  틱마다 시퀀스에서 현재 값의 다음 값으로 한 칸 전진. 새 State 필드가 필요 없었다(v13 스키마 유지).
+  `PackageState.retry_count`를 재사용하지 않은 이유: 그 필드는 이미 "지연체크게이트의 self-loop
+  진입 횟수"로 문서화돼 있고, 배송중게이트를 통과한 패키지의 값이 0이 아닐 수 있어(교통지연 재시도 등)
+  추적agent가 같은 필드를 이어 쓰면 두 노드의 서로 다른 의미가 한 필드에서 충돌했을 것.
+- **이벤트는 패키지 단위로 발생시키고, 같은 패키지의 모든 item에 동일하게 반영한다.** 원칙1
+  (물류사API/캐리어 신호는 Package 사건)을 그대로 따름 — item마다 독립적으로 전진시키지 않는다.
+- **`escalated=true`인 패키지도 계속 전진시킨다.** `PackageState.escalated` 필드 주석의 "비차단"
+  원칙을 실제로 지킨 첫 사례 — 자연재해로 에스컬레이션된 패키지(ADDR-STORM, 시나리오7)도 배송
+  자체는 끝까지 진행되고, 그 사이 `customer_facing_status`는 "지연"으로 노출된다.
+- **`internal_order_status`/`customer_facing_status` 파생값 소유권을 추적agent로 정식 이관.**
+  `derive_internal_order_status()`를 추적agent 모듈에 두고 패키지조립agent가 import해서 쓰도록
+  바꿔, 두 노드가 같은 판단 로직을 공유한다 (패키지조립agent의 `TODO(4단계)` 주석 해소).
+- 시나리오8(배송지 2곳, 지연 없음)로 패키지 여러 개가 함께 봉인되고 함께 "완료"까지 도달하는
+  것을 확인. 다만 두 패키지가 같은 틱에 나란히 전진한 것은 lockstep 단순화(POC 단순화 4번) 때문 —
+  실제로는 각기 다른 시점에 이벤트를 받아야 한다.
 
 ---
 
@@ -151,8 +199,8 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
 | 부가 | 알림agent | 조건부 발송 (비차단) | notification_enabled 확인 후 notification_log에 기록. 워크플로우를 막지 않음 |
 
 **구현 현황**: UserProfile조회 / 주문요청 / 주문검증 / Supervisor(더미) / 창고처리 / 출고전게이트 / 패키지조립 /
-조립대기게이트 / 배송중게이트 = 구현됨(`logistics_agent/nodes/`).
-포장agent · 추적agent · 알림agent = **설계만 있고 코드 없음**(4단계, 포장agent는 순서상 4단계 이전이지만 아직 미착수).
+포장 / 조립대기게이트 / 배송중게이트 / 추적agent = 구현됨(`logistics_agent/nodes/`).
+알림agent = **설계만 있고 코드 없음** (다음 단계).
 
 ### 제거/통합된 것들 (설계 과정에서 폐기 — 이유 포함)
 - ~~출고agent~~, ~~배송출발agent~~ → 추적agent로 흡수 (물리적 액션이 아니라 외부 신호 수신이라 판단)
@@ -178,6 +226,12 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
 > 대칭시켜 출고전게이트가 Item 층위에서도 같은 self-loop 판단 뼈대를 쓸 수 있게 함. 이 참에 `PackageState.retry_count`의
 > 의미도 명확히 함: "Supervisor 재시도 조치 횟수"가 아니라 **지연체크게이트의 self-loop 진입(폴링) 횟수**로 실제 쓰임
 > (문서만 갱신, 필드 자체는 원래도 이 용도로 예약돼 있었음).
+>
+> v13 → 4단계: **필드 변경 없음.** 추적agent도 self-loop 뼈대를 쓰지만 `retry_count`를 재사용하지
+> 않았다 — 그 필드는 이미 "지연체크게이트의 폴링 횟수"로 의미가 좁혀져 있고, 배송중게이트를 거친
+> 패키지는 0이 아닌 값을 들고 올 수 있어 추적agent가 이어 쓰면 두 노드의 의미가 충돌한다. 대신
+> `item_status` 값 자체(포장완료→출고됨→배송중→배송완료)가 진행 카운터를 겸하도록 설계해 새
+> 필드 없이 해결했다.
 
 > GraphState 최상위 키: `user_id` / `confirmed_order_items` / `payment_status_hint`(진입 입력),
 > `user_profile`, `order`, **`packages: list[PackageState]`**, `validation_passed` / `validation_errors`, `supervisor_decision` / `supervisor_notes`.
@@ -254,7 +308,8 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
 | lng | float | |
 | updated_at | timestamp | 이 좌표를 받은 시각 |
 
-**아직 아무도 채우지 않는다** — 4단계 추적agent가 GPS 신호를 받으면서 처음 쓰게 됨. 조립 시점엔 null.
+조립 시점엔 null. **4단계부터 추적agent가 채운다** — item_status가 "출고됨" 이상으로 전진할 때마다
+진행 단계 기반 placeholder 좌표로 갱신 (POC 단순화 5번, 실제 GPS 폴링 아님).
 
 ### UserProfile (별도 캡슐, 참조 전용)
 | 필드 | 타입 | 비고 |
@@ -279,11 +334,13 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
   — 동기 실행되는 POC 데모에서 벽시계 시간 경과를 재현할 수 없어서 튜닝한 단순화. `join_waiting_since`는
   여전히 최초 대기 시각을 보존하는 기록용 필드로 남아있음 (판단=retry_count / 기록=join_waiting_since, 원칙3).
   실제 서비스라면 폴링 주기 × 경과 tick 또는 진짜 타임스탬프 비교로 대체해야 함
-- `internal_order_status`(조립중/출고준비)를 지금은 패키지조립agent가 잠정 세팅 — 4단계에서 추적agent로 이관 예정
 - 지연 카테고리 우선순위 정책(자연재해 > 교통지연 등)의 실제 테이블 구조 — 온톨로지(Neo4j) 단계에서 확정 예정
 - 자연재해 지연의 종료 조건 — 외부 재해상태 API 연동 전제, 없으면 사람 확인 fallback
 - Supervisor의 여러 decision_type을 어떻게 하나의 노드 안에서 깔끔하게 분기할지 (payload 구조는 정했으나 실제 프롬프트 설계는 미정)
 - 온톨로지(Neo4j) 스키마는 "워크플로우가 필요로 하는 만큼만" 상향식으로 만들기로 함 — 아직 미착수
+- 출고전게이트가 여전히 창고처리agent 대신 item_status를 직접 확정한다 (POC 단순화 1번) — 창고처리agent
+  재진입성 리팩터는 4단계에서도 의도적으로 보류, 다음 단계 후보
+- 알림agent 미착수 — notification_enabled/notification_log 필드는 이미 있음
 
 ## 확장 지점 (지금 범위 밖, 문서에만 남김)
 - Kafka/Confluent/ClickHouse 등 실제 스트리밍 인프라 — POC에서는 간단한 신호 발생기로 대체 예정
