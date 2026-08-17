@@ -34,8 +34,10 @@ def _new_package(address_id: str, now: str) -> PackageState:
 
 
 def _find_item(item_list: list[Item], order_id: str, ref: SourceItemRef) -> Item | None:
-    """SourceItemRef → Item 해석. 다른 주문 소속 item은 이 State에 없어 None."""
-    # TODO(다중주문): 여러 주문을 한 패키지로 합포장하면 타 주문 item 조회 경로가 필요
+    """SourceItemRef → Item 해석."""
+    # SourceItemRef가 order_id를 들고 있는 건 구조상 필드일 뿐, 여러 주문을 한 패키지로
+    # 합포장하는 시나리오는 없다(Order-Package는 1:N). 조회가 항상 같은 주문 내에서만
+    # 일어난다는 걸 보장하는 방어 체크 — 불일치하면 데이터 오류이므로 None 반환.
     if ref["order_id"] != order_id:
         return None
     return next((item for item in item_list if item["item_id"] == ref["item_id"]), None)

@@ -124,7 +124,8 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
    - 예: Join노드는 별도 존재가 아니라 패키지조립agent 내부의 카운트 로직으로 흡수
    - 예: 출고/배송출발은 "행동"이 아니라 외부 신호를 받는 이벤트 반영이라 추적agent로 흡수
 
-5. **Order-Package는 N:M 관계.** 한 주문이 여러 배송지로 쪼개질 수 있고, 여러 주문이 한 패키지로 묶일 수 있음.
+5. **Order-Package는 1:N 관계 (N:M 아님).** 한 주문의 item들이 배송지별로 여러 Package에 나뉘어 쪼개질 수 있음
+   (실 커머스에 여러 사용자의 주문을 한 패키지로 합치는 사례는 없음 — 합포장은 존재하지 않는 시나리오였음).
    실제 연결의 최소 단위는 Item (item.package_ref로 연결).
 
 6. **완전동기(Join으로 전부 대기) 대신 비동기 부분배송을 기본으로 한다.**
@@ -180,7 +181,7 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
 
 > GraphState 최상위 키: `user_id` / `confirmed_order_items` / `payment_status_hint`(진입 입력),
 > `user_profile`, `order`, **`packages: list[PackageState]`**, `validation_passed` / `validation_errors`, `supervisor_decision` / `supervisor_notes`.
-> Package는 Order 안이 아니라 **최상위**에 있다 — 원칙 5(Order-Package는 N:M)를 State 구조로 지킨 것.
+> Package는 Order 안이 아니라 **최상위**에 있다 — 원칙 5(Order-Package는 1:N)를 State 구조로 지킨 것.
 
 ### Address (delivery_addresses 원소)
 | 필드 | 타입 | 비고 |
@@ -223,7 +224,7 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
 | 필드 | 타입 | 비고 |
 |---|---|---|
 | package_id | string | |
-| source_items | list[SourceItemRef] | {order_id, item_id} — 여러 주문 소속 item 포함 가능 |
+| source_items | list[SourceItemRef] | {order_id, item_id} — 같은 주문 내 여러 item을 담음 (여러 주문 합포장은 없음) |
 | delivery_address_id | string | 이 패키지의 배송지. 미봉인 패키지 재사용 시 매칭 키 |
 | required_item_count | int | source_items 개수 |
 | arrived_item_count | int | item_status가 피킹완료 이상인 source_item 수 |
@@ -278,7 +279,6 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
   — 동기 실행되는 POC 데모에서 벽시계 시간 경과를 재현할 수 없어서 튜닝한 단순화. `join_waiting_since`는
   여전히 최초 대기 시각을 보존하는 기록용 필드로 남아있음 (판단=retry_count / 기록=join_waiting_since, 원칙3).
   실제 서비스라면 폴링 주기 × 경과 tick 또는 진짜 타임스탬프 비교로 대체해야 함
-- 다중 주문 합포장 시 `source_items`의 타 주문 item 조회 경로 — 현재 단일 주문 State 전제라 `_find_item`이 타 주문은 None 반환. 실제 합포장은 주문 간 공유 저장소(또는 온톨로지 조회)가 전제
 - `internal_order_status`(조립중/출고준비)를 지금은 패키지조립agent가 잠정 세팅 — 4단계에서 추적agent로 이관 예정
 - 지연 카테고리 우선순위 정책(자연재해 > 교통지연 등)의 실제 테이블 구조 — 온톨로지(Neo4j) 단계에서 확정 예정
 - 자연재해 지연의 종료 조건 — 외부 재해상태 API 연동 전제, 없으면 사람 확인 fallback
