@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import cast
 
+from logistics_agent.nodes._common import _now
 from logistics_agent.state import GraphState, Item, OrderState, PackageState
 
 MAX_GATE_RETRIES = 3
@@ -28,10 +28,6 @@ _PACKAGE_DELAY_SIGNAL: dict[str, tuple[list[str], int | None]] = {
     "ADDR-OFFICE": (["교통지연"], 1),
     "ADDR-STORM": (["자연재해"], None),
 }
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def outbound_delay_gate(state: GraphState) -> GraphState:

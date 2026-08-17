@@ -9,10 +9,10 @@ Order 파생값 재계산을 분리해서 담당한다.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import cast
 
 from logistics_agent.enums import InternalOrderStatus
+from logistics_agent.nodes._common import _now
 from logistics_agent.state import GraphState, GpsPoint, Item, OrderState, PackageState
 
 # 포장완료 이후 캐리어 이벤트 고정 시퀀스. item_status 값 자체가 "지금 몇 번째 이벤트까지
@@ -25,10 +25,6 @@ _CUSTOMER_FACING_MAP = {
     "배송중": "배송중",
     "배송완료": "배송완료",
 }
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def mock_carrier_signal(state: GraphState) -> GraphState:

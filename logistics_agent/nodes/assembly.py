@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 from typing import cast
 
+from logistics_agent.nodes._common import _now
 from logistics_agent.nodes.tracking import derive_internal_order_status
 from logistics_agent.state import GraphState, Item, OrderState, PackageState, SourceItemRef
 
@@ -50,7 +50,7 @@ def package_assembly_agent(state: GraphState) -> GraphState:
     order_id = order["order_id"]
     item_list: list[Item] = list(order["item_list"])
     packages: list[PackageState] = list(state.get("packages", []))
-    now = datetime.now(timezone.utc).isoformat()
+    now = _now()
 
     # 아직 package_ref가 없는 item만 수집 (이미 배정된 건 스킵 — 재진입 멱등성)
     unassigned = [(idx, item) for idx, item in enumerate(item_list) if item["package_ref"] is None]

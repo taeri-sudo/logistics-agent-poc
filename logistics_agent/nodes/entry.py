@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 from typing import cast
 
 from logistics_agent.data.mock_profiles import MOCK_USER_PROFILES
+from logistics_agent.nodes._common import _now
 from logistics_agent.state import Address, GraphState, Item, OrderState
 
 
@@ -71,7 +71,7 @@ def order_request_agent(state: GraphState) -> GraphState:
     profile = state["user_profile"]
     confirmed_items = state.get("confirmed_order_items", [])
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = _now()
     order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
     trace_id = uuid.uuid4().hex
 
