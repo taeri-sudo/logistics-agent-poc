@@ -90,6 +90,10 @@ def order_request_agent(state: GraphState) -> GraphState:
                 "delivery_address_id": address_ids[idx],
                 "location": raw.get("location"),
                 "customer_facing_status": "주문접수",
+                "policy_version_applied": None,
+                "last_checked_at": None,
+                "retry_count": 0,
+                "escalated": False,
             }
         )
 

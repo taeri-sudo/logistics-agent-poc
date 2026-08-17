@@ -1,4 +1,4 @@
-"""State 스키마 v12 — LangGraph GraphState 정의."""
+"""State 스키마 v13 — LangGraph GraphState 정의."""
 
 from __future__ import annotations
 
@@ -58,6 +58,12 @@ class Item(TypedDict):
     delivery_address_id: str  # Order.delivery_addresses 중 하나를 참조
     location: Location | None
     customer_facing_status: CustomerFacingStatus
+    # 아래 4개는 v13 신설 — 출고전게이트(지연체크게이트)의 self-loop 판단용.
+    # PackageState의 동명 필드와 대칭 (같은 self-loop 패턴을 Item 층위에도 재사용)
+    policy_version_applied: str | None
+    last_checked_at: str | None
+    retry_count: int
+    escalated: bool
 
 
 class SourceItemRef(TypedDict):

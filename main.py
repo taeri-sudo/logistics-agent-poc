@@ -90,6 +90,85 @@ def run_demo() -> None:
     )
     _print_result(result_split)
 
+    print()
+    print("=" * 60)
+    print("시나리오 4: 지연 없음 → 3개 게이트 모두 self-loop 없이 1회 통과")
+    print("=" * 60)
+    result_clean = app.invoke(
+        {
+            "user_id": "user-001",
+            "confirmed_order_items": [
+                {
+                    "item_id": "SKU-101",
+                    "delivery_address_id": "ADDR-HOME",
+                    "location": {"zone": "A", "shelf": "01", "bin": "01"},
+                },
+            ],
+            "payment_status_hint": "완료",
+        }
+    )
+    _print_result(result_clean)
+
+    print()
+    print("=" * 60)
+    print("시나리오 5: 재시도 후 통과 (출고전게이트: 재고부족 해소 / 배송중게이트: 교통지연 해소)")
+    print("=" * 60)
+    result_retry_pass = app.invoke(
+        {
+            "user_id": "user-001",
+            "confirmed_order_items": [
+                {
+                    # 재고부족 → 출고전게이트가 2회 재시도 후 해소 → 피킹완료
+                    "item_id": "SKU-102",
+                    "delivery_address_id": "ADDR-OFFICE",
+                    "item_delay_reason": "재고부족",
+                },
+            ],
+            "payment_status_hint": "완료",
+        }
+    )
+    _print_result(result_retry_pass)
+
+    print()
+    print("=" * 60)
+    print("시나리오 6: 재시도 초과 에스컬레이션 (출고전게이트→조립대기게이트 연쇄)")
+    print("=" * 60)
+    result_escalate_chain = app.invoke(
+        {
+            "user_id": "user-001",
+            "confirmed_order_items": [
+                {
+                    # 파손 → 재시도로 영구 미해소 → 출고전게이트 3회 재시도 후 item escalated=true
+                    # → 패키지도 영원히 미봉인 → 조립대기게이트도 3회 재시도 후 package escalated=true
+                    "item_id": "SKU-103",
+                    "delivery_address_id": "ADDR-HOME",
+                    "item_delay_reason": "파손",
+                },
+            ],
+            "payment_status_hint": "완료",
+        }
+    )
+    _print_result(result_escalate_chain)
+
+    print()
+    print("=" * 60)
+    print("시나리오 7: 즉시 에스컬레이션 (배송중게이트: 자연재해는 재시도 없이 바로 escalated=true)")
+    print("=" * 60)
+    result_disaster = app.invoke(
+        {
+            "user_id": "user-001",
+            "confirmed_order_items": [
+                {
+                    "item_id": "SKU-104",
+                    "delivery_address_id": "ADDR-STORM",
+                    "location": {"zone": "A", "shelf": "01", "bin": "01"},
+                },
+            ],
+            "payment_status_hint": "완료",
+        }
+    )
+    _print_result(result_disaster)
+
 
 def _print_result(state: dict) -> None:
     order = state.get("order", {})
@@ -115,6 +194,10 @@ def _print_result(state: dict) -> None:
                 "arrived_item_count": pkg["arrived_item_count"],
                 "tracking_number": pkg["tracking_number"],
                 "join_waiting_since": pkg["join_waiting_since"],
+                "delay_categories": pkg["delay_categories"],
+                "retry_count": pkg["retry_count"],
+                "escalated": pkg["escalated"],
+                "policy_version_applied": pkg["policy_version_applied"],
             }
             for pkg in state.get("packages", [])
         ],

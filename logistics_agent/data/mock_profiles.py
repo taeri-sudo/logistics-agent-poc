@@ -21,6 +21,14 @@ MOCK_USER_PROFILES: dict[str, UserProfile] = {
                 "postal_code": "07326",
                 "address_line": "서울특별시 영등포구 여의대로 108 9층",
             },
+            {
+                # 3단계 배송중게이트 자연재해 데모 전용 (package_id는 uuid라 고정 못하므로 주소로 대체)
+                "address_id": "ADDR-STORM",
+                "recipient": "홍길동",
+                "phone": "010-1234-5678",
+                "postal_code": "63127",
+                "address_line": "제주특별자치도 제주시 첨단로 242",
+            },
         ],
         "payment_method": {"type": "card", "last4": "4242"},
         "notification_enabled": True,
