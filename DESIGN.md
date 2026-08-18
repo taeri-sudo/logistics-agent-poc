@@ -306,8 +306,8 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 |---|---|---|---|
 | 진입 | UserProfile 조회 | 조회(비판단) | 로그인 세션에서 delivery_addresses(주소록), payment_method, notification_enabled 로드 |
 | 진입 | 주문요청agent | 이벤트 | 확정된 주문내역(장바구니 아님)으로 item_list 생성 |
-| 관문 | 주문검증agent | 조건분기 | payment_status, 배송지 검증 → 통과/실패 |
-| 판단 | Supervisor | LLM 판단 | decision_type별로 나뉨. **proceed_to_warehouse**(그래프 노드 자체, 규칙만으로 결정돼 아직 더미) / **predict_delay_escalation**(Google Gemini 실제 호출, 배송중게이트가 함수로 직접 호출 — 별도 그래프 노드 아님, 판단+근거텍스트를 SupervisorPrediction으로 반환) |
+| 관문 | 주문검증agent | 조건분기 | payment_status, 배송지 검증 → 통과/실패 (빈 주소록/`delivery_address_id=""` 케이스는 격리 테스트로 실패 처리 확인 완료, 별도 시나리오 미추가) |
+| 판단 | Supervisor | LLM 판단 | "Supervisor"는 그래프 노드/함수 하나의 이름이 아니라 decision_type들을 아우르는 개념(`supervisor.py`). **decide_warehouse_entry**(decision_type=proceed_to_warehouse, 그래프 노드 자체, 규칙만으로 결정돼 아직 더미) / **predict_delay_escalation**(Google Gemini 실제 호출, 배송중게이트가 함수로 직접 호출 — 별도 그래프 노드 아님, 판단+근거텍스트를 SupervisorPrediction으로 반환) |
 | 반복 | 창고처리agent | 조회+액션 (내장 루프) | item_list 순회, Sensor(위치확인)→Action(피킹). 정상 케이스는 온톨로지 조회로 처리, 예외만 Supervisor 호출 |
 | 집계 | 패키지조립agent | 조건카운트 | `package_ref`가 없는 item을 `delivery_address_id` 기준으로 묶음(`split_delivery_preference=true`면 같은 배송지도 item별로 분리). 같은 배송지의 미봉인 패키지가 있으면 합류(분리배송이면 항상 신규). required/arrived count 체크, 충족시 봉인+tracking_number 발급. (구 Join노드 흡수) |
 | 액션 | 포장agent | 액션 | 포장 완료 처리 (Package 단위 일괄, "포장중" 중간상태는 item 레벨엔 없음) |
@@ -479,6 +479,14 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
   경로를 타긴 하지만, "이상하지만 파싱은 되는" 응답(예: reasoning이 텅 비거나 프롬프트를 그대로
   반복)까지 걸러내진 않음
 - 온톨로지(Neo4j) 스키마는 "워크플로우가 필요로 하는 만큼만" 상향식으로 만들기로 함 — 아직 미착수
+- **`decide_warehouse_entry`(구 `supervisor()`)는 지금 온톨로지 조회조차 없는 완전한 pass-through다.**
+  창고처리 여부를 사실상 항상 "진행"으로 고정 반환할 뿐, 실제로 뭔가를 조회하거나 판단하지 않는다.
+  온톨로지(Neo4j) 구축 이후 다음 단계로 고려할 구조: 이 자리에 **별도의 "온톨로지조회노드"**
+  (판단 없음, Agent 아님 — 단순 조회)를 추가하고, 진짜 Supervisor(예측/판단 영역)는 그 조회
+  결과에서 이상 신호가 발견될 때만 개입하도록 나눈다. 지금의 "예외 없으면 규칙만으로 결정"이라는
+  더미 판단을, 실제 조회 결과 기반 판단으로 교체하는 것과 같은 방향 — `predict_delay_escalation`이
+  이미 "이상 신호가 있을 때만 LLM 개입"이라는 같은 패턴을 배송중게이트에서 쓰고 있어 선례로
+  참고할 수 있다.
 - 출고전게이트가 여전히 창고처리agent 대신 item_status를 직접 확정한다 (POC 단순화 1번) — 창고처리agent
   재진입성 리팩터는 4단계에서도 의도적으로 보류, 다음 단계 후보
 - 알림agent 미착수 — notification_enabled 필드는 이미 있음 (notification_log 관련은 아래
@@ -536,6 +544,10 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 - Unity Catalog류 거버넌스 계층 — Neo4j(온톨로지)와는 별개로, 데이터/툴 접근 통제용으로 향후 고려
 - 취소 워크플로우 (cancel_requested_at/cancel_status는 필드만 존재, 처리 흐름 미구현)
 - 사용자 endpoint "도킹" 개념 (사이트별 프로필 스키마를 표준 캡슐로 변환하는 어댑터) — 현재 기술로 완전 표준화 어려움, 개념만 남김
+- `_is_valid_address`는 필드가 채워졌는지(형식)만 검사하고, 실제 존재하는 주소인지(우편번호 유효성,
+  도로명주소 실존 여부)는 검증하지 않는다. 실제 서비스라면 이 지점에 외부 주소 검증 API(우체국
+  도로명주소 API 등) 연동이 필요하며, 이는 `mock_carrier_signal`이 실제 캐리어 API 자리를 대신하는
+  것과 같은 성격의 "외부 시스템 경계" 지점이다.
 
 ## 실무 전환 시 고려사항
 - `main.py`의 데모 시나리오 9개는 POC 검증용이다. 실제 서비스화 시 `main.py`(순수 진입점)와

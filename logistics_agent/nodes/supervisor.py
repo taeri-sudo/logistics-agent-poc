@@ -1,13 +1,20 @@
-"""판단 노드: Supervisor — 온톨로지/규칙으로 못 정하는 예외 판단을 모아두는 자리.
+"""Supervisor — 온톨로지/규칙으로 못 정하는 예외 판단을 아우르는 개념.
 
-decision_type이 여러 개 있을 수 있다는 전제로 나뉘어 있다:
-- proceed_to_warehouse: 창고처리 진입 여부. 예외가 없으면 규칙만으로 결정되는 판단이라
-  아직 LLM이 필요 없음(더미 유지) — 그래프 노드(`supervisor`) 자체가 이 decision_type 전용.
-- predict_delay_escalation: 배송 지연이 정상 재시도로 해결될지, 지금 바로 사람에게
+"Supervisor"는 이 파일 안에 있는 개별 그래프 노드나 함수 하나의 이름이 아니라, 여러
+decision_type을 아우르는 상위 개념이다. **각 decision_type은 별도 함수로 구현**하고,
+함수명은 그 decision_type이 실제로 하는 일을 그대로 드러낸다:
+
+- **decide_warehouse_entry** (decision_type=proceed_to_warehouse): 창고처리 진입 여부.
+  그래프 노드 자체가 이 decision_type 전용. 지금은 예외가 없으면 규칙만으로 결정되는
+  판단이라 LLM이 필요 없다 — 더미(고정 판단) 그대로 유지.
+- **predict_delay_escalation**: 배송 지연이 정상 재시도로 해결될지, 지금 바로 사람에게
   올려야 할지 예측. 신호가 여러 개(지연 카테고리/재시도 횟수/재고부족 품목 수/경과 시간)라
   규칙표로 못 박기보다 LLM 판단이 맞다고 봐서 Google Gemini를 실제로 호출한다.
   별도 그래프 노드로 만들지 않았다 — 배송중게이트가 이미 "판단+반복" 노드라 그 판단을
   함수 호출로 흡수하는 쪽이 노드를 늘리는 것보다 낫다고 판단(CLAUDE.md 흡수 우선 원칙).
+
+앞으로 decision_type이 늘어나도 이 파일에 함수만 추가하면 된다 — "Supervisor"라는
+이름의 그래프 노드나 클래스가 따로 존재하지 않는다는 점에 유의.
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ load_dotenv()
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"
 
 
-def supervisor(state: GraphState) -> GraphState:
+def decide_warehouse_entry(state: GraphState) -> GraphState:
     """decision_type=proceed_to_warehouse. 예외가 없으면 규칙만으로 결정되는 판단이라 더미 유지."""
     order = state["order"]
     item_count = len(order["item_list"])
@@ -37,7 +44,7 @@ def supervisor(state: GraphState) -> GraphState:
     decision = "proceed_to_warehouse"
     notes = f"예외 없음. {item_count}개 품목 창고 처리 진행."
 
-    print(f"[Supervisor] decision={decision}, notes={notes}")
+    print(f"[Supervisor:decide_warehouse_entry] decision={decision}, notes={notes}")
 
     order = cast(OrderState, {**order, "internal_order_status": "창고처리중"})
     return {
@@ -103,14 +110,14 @@ def predict_delay_escalation(signals: DelayRiskSignals) -> SupervisorPrediction:
     try:
         prediction = cast(SupervisorPrediction, _delay_prediction_llm().invoke(prompt))
     except Exception as exc:  # 외부 API 경계 — 여기서만 넓게 잡는다
-        print(f"  [Supervisor] predict_delay_escalation 호출 실패: {exc}")
+        print(f"  [Supervisor:predict_delay_escalation] 호출 실패: {exc}")
         return SupervisorPrediction(
             escalate_now=False,
             reasoning=f"LLM 호출 실패({exc.__class__.__name__}) — 기존 재시도 임계치로 폴백",
         )
 
     print(
-        f"  [Supervisor] predict_delay_escalation package_id={signals.package_id} "
+        f"  [Supervisor:predict_delay_escalation] package_id={signals.package_id} "
         f"escalate_now={prediction.escalate_now} reasoning={prediction.reasoning}"
     )
     return prediction

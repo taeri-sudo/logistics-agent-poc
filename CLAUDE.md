@@ -65,6 +65,11 @@ DESIGN.md의 "제거/통합된 것들" 목록이 그 판단의 선례다.
   보장이 없어 오타를 가려주면 안 되는 곳)에는 쓰지 않는다.
 - 노드 함수명·그래프 노드명은 snake_case 영어, **docstring·print·enum 값은 한국어**.
 - 로깅은 `logging` 없이 `print()`. 형식은 `[노드명] key=value`, 내부 루프는 두 칸 들여쓰고 서브태그(`  [Sensor]`, `  [봉인]`).
+  한 파일이 여러 decision_type/함수를 아우르는 개념 이름일 때(예: `supervisor.py`)는
+  `[개념:함수명]`으로 세분화한다(`[Supervisor:decide_warehouse_entry]`,
+  `[Supervisor:predict_delay_escalation]`) — 무슨 일이 났는지는 항상 브라켓 안에 담는다는
+  원칙(`[해소]`, `[재시도]`, `[모의신호]`와 동일)을 따른 것. 메시지 본문에 함수명을 텍스트로
+  풀어쓰는 것만으로는 나중에 decision_type이 늘어났을 때 grep/육안 스캔이 어려워진다.
 - ID는 `f"PKG-{uuid.uuid4().hex[:8].upper()}"` 꼴, 타임스탬프는 `datetime.now(timezone.utc).isoformat()`.
 - TypedDict를 읽기만 하는 파라미터는 `dict`가 아니라 `Mapping[str, object]`로 받는다.
   **TypedDict는 `dict[...]`에 대입되지 않는다** (임의 키 추가/삭제가 구조를 깨뜨리므로 읽기 전용 매핑에만 대입 가능).
