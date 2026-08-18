@@ -72,6 +72,7 @@ def order_request_agent(state: GraphState) -> GraphState:
     confirmed_items = state.get("confirmed_order_items", [])
 
     now = _now()
+    order_created_at = state.get("order_created_at_hint") or now
     order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
     trace_id = uuid.uuid4().hex
 
@@ -101,7 +102,7 @@ def order_request_agent(state: GraphState) -> GraphState:
 
     order: OrderState = {
         "order_id": order_id,
-        "order_created_at": now,
+        "order_created_at": order_created_at,
         "delivery_addresses": delivery_addresses,
         "payment_status": payment_status,
         "split_delivery_preference": state.get("split_delivery_preference_hint", False),

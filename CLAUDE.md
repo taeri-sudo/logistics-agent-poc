@@ -79,3 +79,9 @@ venv\Scripts\python.exe main.py
 테스트 프레임워크는 없다. 검증은 `main.py`의 시나리오를 실행해 출력으로 확인하며,
 새 기능을 넣으면 그 분기를 실제로 타는 시나리오를 추가한다
 (예: 대기 브랜치를 보려면 `item_delay_reason`을 넣어 피킹이 스킵되게 만들어야 한다).
+
+배송중게이트는 Supervisor의 `predict_delay_escalation`(Google Gemini 실제 호출)을 탄다.
+`.env`의 `GOOGLE_API_KEY`가 없으면 실패하고 `escalate_now=False`로 폴백하므로 데모 자체는
+API 키 없이도 끝까지 실행된다 — 폴백이 아니라 실제 예측 결과를 보려면 키가 필요하다.
+이 호출만은 실제 네트워크에 나가는 유일한 지점이라 그 시나리오(main.py 10번)만 실행마다
+결과가 달라질 수 있다(비결정론).

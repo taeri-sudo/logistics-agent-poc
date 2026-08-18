@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from logistics_agent.graph import app
 
@@ -225,6 +226,33 @@ def run_demo() -> None:
     )
     _print_result(result_split_pref)
 
+    print()
+    print("=" * 60)
+    print("시나리오 10: Supervisor 조기 에스컬레이션 대조 — retry_count=0인데도 미리 올릴 수 있는가")
+    print("=" * 60)
+    print("(Google Gemini 실제 호출. GOOGLE_API_KEY 미설정 시 predict_delay_escalation이 폴백해서")
+    print(" escalate_now=False로 처리되고, 이 경우 아래는 시나리오5와 동일하게 정상 해소로 끝남)")
+    old_order_created_at = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    result_supervisor_predict = app.invoke(
+        {
+            "user_id": "user-001",
+            "confirmed_order_items": [
+                {
+                    # ADDR-OFFICE는 교통지연(resolve_at=1)이라 고정 카운터만 보면 재시도 1번이면
+                    # 곧 해소될 상황. 하지만 order_created_at을 10일 전으로 못박아서 Supervisor에게
+                    # "이 주문 자체가 이미 오래 묶여있다"는 맥락을 줌 — retry_count=0인 첫 틱에서
+                    # Supervisor가 그래도 조기 에스컬레이션할지가 대조 포인트
+                    "item_id": "SKU-401",
+                    "delivery_address_id": "ADDR-OFFICE",
+                    "location": {"zone": "A", "shelf": "01", "bin": "01"},
+                },
+            ],
+            "payment_status_hint": "완료",
+            "order_created_at_hint": old_order_created_at,
+        }
+    )
+    _print_result(result_supervisor_predict)
+
 
 def _print_result(state: dict) -> None:
     order = state.get("order", {})
@@ -255,6 +283,7 @@ def _print_result(state: dict) -> None:
                 "delay_categories": pkg["delay_categories"],
                 "retry_count": pkg["retry_count"],
                 "escalated": pkg["escalated"],
+                "escalation_reasoning": pkg["escalation_reasoning"],
                 "policy_version_applied": pkg["policy_version_applied"],
             }
             for pkg in state.get("packages", [])

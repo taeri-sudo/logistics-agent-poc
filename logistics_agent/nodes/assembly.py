@@ -29,6 +29,7 @@ def _new_package(address_id: str, now: str) -> PackageState:
         "last_checked_at": now,
         "retry_count": 0,
         "escalated": False,
+        "escalation_reasoning": None,
         "join_waiting_since": None,
         "notification_log": [],
     }

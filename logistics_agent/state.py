@@ -90,6 +90,7 @@ class PackageState(TypedDict):
     last_checked_at: str
     retry_count: int
     escalated: bool
+    escalation_reasoning: str | None  # Supervisor(predict_delay_escalation)의 판단 근거 (설명가능성)
     join_waiting_since: str | None
     notification_log: list[NotificationEntry]
 
@@ -120,6 +121,7 @@ class GraphState(TypedDict, total=False):
     confirmed_order_items: list[dict]
     payment_status_hint: PaymentStatus  # 주문 생성 시 payment_status (데모/외부결제 연동용)
     split_delivery_preference_hint: bool  # 주문 생성 시 split_delivery_preference (데모용, 기본 False)
+    order_created_at_hint: str  # 주문 생성 시각을 과거로 강제 지정 (데모용 — 없으면 실제 현재 시각)
 
     # UserProfile (조회 전용 캡슐)
     user_profile: UserProfile

@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import cast
 
 from logistics_agent.nodes._common import _now
+from logistics_agent.nodes.supervisor import DelayRiskSignals, predict_delay_escalation
 from logistics_agent.state import GraphState, Item, OrderState, PackageState
 
 MAX_GATE_RETRIES = 3
@@ -65,6 +67,7 @@ def outbound_delay_gate(state: GraphState) -> GraphState:
                 **item,
                 "retry_count": new_retry,
                 "escalated": escalated,
+                "customer_facing_status": "지연",
                 "last_checked_at": now,
                 "policy_version_applied": POLICY_VERSION,
             },
@@ -136,8 +139,13 @@ def route_after_assembly_wait_gate(state: GraphState) -> str:
 def in_transit_delay_gate(state: GraphState) -> GraphState:
     """배송중게이트: 봉인된 Package의 delay_categories 체크.
 
-    자연재해는 재시도 없이 즉시 escalated=true. 그 외 지연은 재시도 예산 소진 시 escalated=true.
+    자연재해는 재시도 없이 즉시 escalated=true. 그 외 지연은 매 틱마다 Supervisor에게
+    조기 에스컬레이션 여부를 먼저 물어보고(predict_delay_escalation), Supervisor가
+    "아직 지켜봐도 됨"이라고 하면 기존 재시도 예산(retry_count>MAX_GATE_RETRIES) 임계치로
+    폴백한다 — Supervisor 판단이 고정 임계치를 대체하는 게 아니라, 그보다 먼저 나서는
+    조기경보 경로를 하나 더 추가하는 구조.
     """
+    order = state["order"]
     packages: list[PackageState] = list(state.get("packages", []))
     now = _now()
 
@@ -163,7 +171,10 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
 
         if not categories:
             if pkg["delay_categories"]:
-                packages[pos] = cast(PackageState, {**pkg, "delay_categories": [], "last_checked_at": now})
+                packages[pos] = cast(
+                    PackageState,
+                    {**pkg, "delay_categories": [], "escalation_reasoning": None, "last_checked_at": now},
+                )
             continue
 
         if resolve_at is not None and pkg["retry_count"] >= resolve_at:
@@ -172,11 +183,43 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
                 {
                     **pkg,
                     "delay_categories": [],
+                    "escalation_reasoning": None,
                     "last_checked_at": now,
                     "policy_version_applied": POLICY_VERSION,
                 },
             )
             print(f"  [해소] {pkg['package_id']} {categories} → 지연없음")
+            continue
+
+        low_stock_item_count = sum(
+            1 for item in order["item_list"] if item["item_delay_reason"] == "재고부족"
+        )
+        elapsed_hours = (
+            datetime.fromisoformat(now) - datetime.fromisoformat(order["order_created_at"])
+        ).total_seconds() / 3600
+        prediction = predict_delay_escalation(
+            DelayRiskSignals(
+                package_id=pkg["package_id"],
+                delay_categories=categories,
+                retry_count=pkg["retry_count"],
+                low_stock_item_count=low_stock_item_count,
+                elapsed_hours_since_order=elapsed_hours,
+            )
+        )
+
+        if prediction.escalate_now:
+            packages[pos] = cast(
+                PackageState,
+                {
+                    **pkg,
+                    "delay_categories": categories,
+                    "escalated": True,
+                    "escalation_reasoning": prediction.reasoning,
+                    "last_checked_at": now,
+                    "policy_version_applied": POLICY_VERSION,
+                },
+            )
+            print(f"  [Supervisor 조기에스컬레이션] {pkg['package_id']} {categories} retry_count={pkg['retry_count']}")
             continue
 
         new_retry = pkg["retry_count"] + 1
@@ -188,6 +231,7 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
                 "delay_categories": categories,
                 "retry_count": new_retry,
                 "escalated": escalated,
+                "escalation_reasoning": prediction.reasoning,
                 "last_checked_at": now,
                 "policy_version_applied": POLICY_VERSION,
             },
