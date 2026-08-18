@@ -36,12 +36,20 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
 
 | 경고 | 원인 | 결정 |
 |---|---|---|
-| `{**td, ...}`가 TypedDict에 대입 안 됨 (11곳) | 스프레드가 포함된 dict 표현식은 `dict[str, Unknown]`으로 추론됨 | `cast(OrderState, {**order, ...})`로 통일. 스프레드 자리에만 쓰고, 키를 새로 쓰는 자리(`_new_package`)에는 쓰지 않음 — 거기선 cast가 오타를 가려버림 |
+| `{**td, ...}`가 TypedDict에 대입 안 됨 (11곳) | 스프레드가 포함된 dict 표현식은 `dict[str, Unknown]`으로 추론됨 | `cast(OrderState, {**order, ...})`로 통일. 스프레드 자리에만 쓰고, 키를 새로 쓰는 자리(`_new_package`)에는 쓰지 않음 |
 | `Address`를 `dict` 파라미터에 못 넘김 | **TypedDict는 `dict[...]`에 대입 불가** (임의 키 추가/삭제가 구조를 깨뜨리므로). 읽기 전용 매핑에만 대입 가능 | `_is_valid_address(address: Mapping[str, object])`. `Address`로 좁히지 않은 이유: 이 함수는 "키 누락"을 검사하는데 `Address`(total=True)는 키가 다 있다고 단언 → 자기모순. 인라인 신규주소는 사용자 입력이라 실제로 키가 빠질 수 있음 |
 | `state["order"]` 필수 키 아님 | `GraphState`가 `total=False`(부분 업데이트 반환용) | 코드로는 해결 불가 — `order`를 Required로 만들면 `return {"validation_passed": ...}` 같은 부분 반환이 깨짐. `pyrightconfig.json`에서 `reportTypedDictNotRequiredAccess`만 끔 |
 
 `pyrightconfig.json`에는 `include`(venv 스캔 방지), `venvPath`/`venv`(langgraph import 해석), `typeCheckingMode: standard`(IDE 설정과 무관하게 고정)도 함께 명시했다.
 **이 한 규칙 외에 다른 규칙을 끄지 않는다** — 나머지 경고는 실제 문제일 가능성이 높다.
+
+**cast(T, {...})가 정확히 뭘 가려주는지 실험으로 검증함** (4단계 후속). `Item.last_checked_at`(스키마상
+`str`) 자리에 `int`를 넣고 Pylance 진단을 비교: `cast`로 감싸면 에러 0건, `cast`를 떼면 즉시 2건
+("No overloads for `__setitem__` match", "dict[...]는 Item에 대입 불가"). **"키 오타를 못 잡는다"는
+설명은 부정확했다** — 정확히는 `cast(T, expr)`가 `expr` dict 리터럴 전체의 타입 검사를 통째로 끈다
+(키 이름·값의 타입·구조 전체 포함). 그런데도 스프레드 자리에서만 이 트레이드오프를 감수하는 이유:
+원본 TypedDict가 나머지 필드를 이미 보장하는 반복 패턴이라 사람이 눈으로 훑기 쉽고, 대안(값마다
+개별 대입 등)은 코드량이 2~3배로 늘어 오히려 리뷰하기 어려워지기 때문. 자세한 규칙은 CLAUDE.md 참고.
 
 ## 3단계 실행 결과 요약
 

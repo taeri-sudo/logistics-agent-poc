@@ -55,7 +55,14 @@ DESIGN.md의 "제거/통합된 것들" 목록이 그 판단의 선례다.
 - 중첩 갱신은 제자리 변경 대신 **immutable spread**를 `cast`로 감싼다:
   `order = cast(OrderState, {**order, "item_list": item_list})`.
   `{**td, ...}`는 타입체커가 `dict[str, Unknown]`으로 추론해 TypedDict에 대입되지 않으므로 cast가 필요하다.
-  **cast는 스프레드에만 쓴다** — 키 오타를 잡아주지 못하니, 키/값을 새로 쓰는 자리(`_new_package` 등)에는 쓰지 말 것.
+  **cast는 스프레드에만 쓴다.** 실험으로 확인된 정확한 이유: `cast(T, expr)`는 "키 오타만" 못 잡는 게
+  아니라 **`expr`(dict 리터럴) 전체에 대한 타입 검사를 통째로 끈다** — 키 이름, 값의 타입, 구조 전체가
+  전부 무검사 대상이 된다(예: `str` 자리에 `int`를 넣어도 `cast`로 감싸면 Pylance 에러 0건, `cast`를
+  떼면 즉시 2건 잡힘). 그런데도 이 트레이드오프를 감수하는 이유는 스프레드 자리(`{**item, "k": v, ...}`)는
+  원본 TypedDict가 이미 나머지 필드를 보장하고 있어 사람이 눈으로 훑기 쉬운 반복 패턴이기 때문 —
+  대안(`TypedDict(**{**dict(item), "k": v})` 식으로 매번 풀어쓰거나 필드별 개별 대입)은 코드량이
+  2~3배로 늘어 오히려 리뷰하기 어려워진다. 그래서 키/값을 새로 쓰는 자리(`_new_package` 등, 원본
+  보장이 없어 오타를 가려주면 안 되는 곳)에는 쓰지 않는다.
 - 노드 함수명·그래프 노드명은 snake_case 영어, **docstring·print·enum 값은 한국어**.
 - 로깅은 `logging` 없이 `print()`. 형식은 `[노드명] key=value`, 내부 루프는 두 칸 들여쓰고 서브태그(`  [Sensor]`, `  [봉인]`).
 - ID는 `f"PKG-{uuid.uuid4().hex[:8].upper()}"` 꼴, 타임스탬프는 `datetime.now(timezone.utc).isoformat()`.
