@@ -253,6 +253,35 @@ def run_demo() -> None:
     )
     _print_result(result_supervisor_predict)
 
+    print()
+    print("=" * 60)
+    print("시나리오 11: 같은 배송지, 다른 패키지가 서로 다른 지연 신호 (item_id 키잉 검증)")
+    print("=" * 60)
+    result_diverge = app.invoke(
+        {
+            "user_id": "user-001",
+            "confirmed_order_items": [
+                {
+                    # split_delivery_preference=true라 SKU-501/502가 같은 배송지(ADDR-HOME)여도
+                    # 별도 Package로 분리됨. _PACKAGE_DELAY_SIGNAL이 delivery_address_id가 아니라
+                    # item_id로 키잉되므로(delay_gates.py) 두 패키지가 서로 다른 지연을 받아야
+                    # 정상 — SKU-501은 교통지연(재시도로 해소), SKU-502는 자연재해(즉시 에스컬레이션)
+                    "item_id": "SKU-501",
+                    "delivery_address_id": "ADDR-HOME",
+                    "location": {"zone": "A", "shelf": "01", "bin": "01"},
+                },
+                {
+                    "item_id": "SKU-502",
+                    "delivery_address_id": "ADDR-HOME",
+                    "location": {"zone": "A", "shelf": "01", "bin": "02"},
+                },
+            ],
+            "payment_status_hint": "완료",
+            "split_delivery_preference_hint": True,
+        }
+    )
+    _print_result(result_diverge)
+
 
 def _print_result(state: dict) -> None:
     order = state.get("order", {})

@@ -25,11 +25,26 @@ _ITEM_RESOLVE_AT_RETRY: dict[str, int | None] = {
 }
 
 # 데모용 고정 지연 신호 (실제로는 물류사 API/GPS 폴링). package_id는 uuid라 사전에 못 박을 수 없어
-# delivery_address_id를 키로 대신 쓴다. (categories, 해소에 필요한 retry_count / None=영구미해소)
+# item_id를 키로 대신 쓴다 (item_id는 데모 스크립트가 미리 정하는 값이라 예측 가능).
+# delivery_address_id였다가 item_id로 교체함 — 같은 배송지로 가는 패키지가 여럿이면
+# (예: split_delivery_preference=true) 전부 같은 지연을 공유해버리는 문제가 있었음
+# (상세: DESIGN.md POC 단순화 2번). (categories, 해소에 필요한 retry_count / None=영구미해소)
 _PACKAGE_DELAY_SIGNAL: dict[str, tuple[list[str], int | None]] = {
-    "ADDR-OFFICE": (["교통지연"], 1),
-    "ADDR-STORM": (["자연재해"], None),
+    "SKU-102": (["교통지연"], 1),
+    "SKU-104": (["자연재해"], None),
+    "SKU-401": (["교통지연"], 1),
+    "SKU-501": (["교통지연"], 1),
+    "SKU-502": (["자연재해"], None),
 }
+
+
+def _lookup_package_delay_signal(pkg: PackageState) -> tuple[list[str], int | None]:
+    """패키지에 속한 item_id 중 첫 매칭을 반환 (item_id 키잉 — 위 주석 참고)."""
+    for source in pkg["source_items"]:
+        signal = _PACKAGE_DELAY_SIGNAL.get(source["item_id"])
+        if signal is not None:
+            return signal
+    return ([], None)
 
 
 def outbound_delay_gate(state: GraphState) -> GraphState:
@@ -153,7 +168,7 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
         if pkg["tracking_number"] is None or pkg["escalated"]:
             continue
 
-        categories, resolve_at = _PACKAGE_DELAY_SIGNAL.get(pkg["delivery_address_id"], ([], None))
+        categories, resolve_at = _lookup_package_delay_signal(pkg)
 
         if "자연재해" in categories:
             packages[pos] = cast(
