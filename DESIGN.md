@@ -362,7 +362,7 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 | 진입 | 주문요청agent | 이벤트 | 확정된 주문내역(장바구니 아님)으로 item_list 생성 |
 | 관문 | 주문검증agent | 조건분기 | payment_status, 배송지 검증 → 통과/실패 (빈 주소록/`delivery_address_id=""` 케이스는 격리 테스트로 실패 처리 확인 완료, 별도 시나리오 미추가) |
 | 판단 | Supervisor | LLM 판단 | "Supervisor"는 그래프 노드/함수 하나의 이름이 아니라 decision_type들을 아우르는 개념(`supervisor.py`). **decide_warehouse_entry**(decision_type=proceed_to_warehouse, 그래프 노드 자체, 규칙만으로 결정돼 아직 더미) / **predict_delay_escalation**(Google Gemini 실제 호출, 배송중게이트가 함수로 직접 호출 — 별도 그래프 노드 아님, 판단+근거텍스트를 SupervisorPrediction으로 반환) |
-| 반복 | 창고처리agent | 조회+액션 (내장 루프) | item_list 순회, Sensor(위치확인)→Action(피킹). 정상 케이스는 온톨로지 조회로 처리, 예외만 Supervisor 호출 |
+| 반복 | 창고처리agent | 조회+액션 (내장 루프) | item_list 순회, Sensor(위치확인)→Action(피킹). 예외(item_delay_reason)는 피킹만 스킵하고 그대로 넘김 — 해소는 출고전게이트가 담당, Supervisor는 이 경로에 관여하지 않음 |
 | 집계 | 패키지조립agent | 조건카운트 | `package_ref`가 없는 item을 `delivery_address_id` 기준으로 묶음(`split_delivery_preference=true`면 같은 배송지도 item별로 분리). 같은 배송지의 미봉인 패키지가 있으면 합류(분리배송이면 항상 신규). required/arrived count 체크, 충족시 봉인+tracking_number 발급. (구 Join노드 흡수) |
 | 액션 | 포장agent | 액션 | 포장 완료 처리 (Package 단위 일괄, "포장중" 중간상태는 item 레벨엔 없음) |
 | 판단+반복 | 출고전게이트 | self-loop 조건분기 | Item 기반. `item_delay_reason` 있는 item만 대상, 해소되면 피킹완료 확정, 미해소면 자기루프, retry_count 초과시 item escalated=true |
@@ -572,6 +572,29 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
     "정상 해소"를 검증하는 데 쓰고 있어 값을 바꾸면 안 된다 — 이 경로를 실제로 타는 데모를 만들려면
     기존 재고부족과 구분되는 새 신호(예: "완전 단종" 전용 지연 사유나 별도 fixed-mapping)가 필요하다.
 
+### "재고부족" 개념의 세 가지 층위
+
+창고처리agent(warehouse.py)를 검토하다가 "재고부족"이라는 한 단어가 실제로는 서로 다른
+층위 세 개를 뭉뚱그려 가리키고 있다는 걸 발견했다. 구분한다:
+
+1. **결제 시점 재고부족** — 장바구니/결제 단계에서 이미 품절인 상품을 걸러내는 UI/API 검증.
+   이 프로젝트는 "확정된 주문내역"(주문요청agent)부터 시작하므로 범위 밖.
+2. **수량체크 오류로 인한 재고부족** (현재 워크플로우가 다루는 것) — 창고에서 실제로 피킹하려는
+   순간 발견되는, 결정화된 규칙으로 처리 가능한 예외. Supervisor(판단)가 필요 없다 —
+   `item_delay_reason="재고부족"`이 있으면 창고처리agent는 피킹만 스킵하고, 해소/재시도/
+   영구 에스컬레이션 판단은 출고전게이트가 고정 로직(`_ITEM_RESOLVE_AT_RETRY`, retry_count
+   임계치)으로 전담한다. **지금 코드가 정확히 이 층위를 다루고 있고, 이게 맞는 설계였음을
+   재확인했다** — 창고처리agent가 이 예외를 만나 Supervisor를 부르지 않는 것은 문서 오류가
+   아니라 의도된 설계다(위 창고처리agent 행 정정 참고).
+3. **판매량 예측 기반 재고 확보** — "얼마나 미리 발주/보충해둘지"를 예측하는 진짜 판단(예측)
+   영역. 하지만 이건 개별 주문의 창고처리 노드 하나가 다룰 문제가 아니라, 이 주문 워크플로우
+   전체와는 독립적으로 돌아가는 **완전히 별도의 상위 시스템**(재고관리, 배치성 수요예측)의
+   책임이다. 지금 프로젝트 범위 밖 — "확장 지점" 섹션에 기록만 해둔다.
+
+세 층위를 하나의 "재고부족" 필드/노드로 뭉뚱그리지 않고 분리해서 본 것이 핵심 — 층위2에
+Supervisor 판단을 억지로 끼워 넣거나, 층위3(예측)을 이 워크플로우 안에 노드로 만들려는
+시도는 둘 다 잘못된 방향이었을 것.
+
 ## 미구현/죽은 필드 종합
 
 스키마엔 있지만 실제로는 아무도 채우지 않거나, 채워져도 아무도 읽지 않는 필드들. 여러 대화에서
@@ -594,6 +617,9 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
    **구현 시점 예상**: 관측성/LangSmith 연동 시.
 
 ## 확장 지점 (지금 범위 밖, 문서에만 남김)
+- 판매량 예측 기반 재고 확보(사전 발주/보충) — "재고부족" 개념의 세 층위 중 층위3(위 참고).
+  이 주문 워크플로우의 예외 처리(층위2, 출고전게이트가 이미 담당)와는 다른 책임 — 별도 상위
+  시스템(재고관리/배치성 수요예측) 영역
 - Kafka/Confluent/ClickHouse 등 실제 스트리밍 인프라 — POC에서는 간단한 신호 발생기(`mock_carrier_signal`)로 대체함
 - Unity Catalog류 거버넌스 계층 — Neo4j(온톨로지)와는 별개로, 데이터/툴 접근 통제용으로 향후 고려
 - 취소 워크플로우 (cancel_requested_at/cancel_status는 필드만 존재, 처리 흐름 미구현)
