@@ -337,6 +337,46 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
   의도한 동작이다(더 이상 자동으로 바뀔 이유가 없는 최종 신호). 시나리오3/5/6 전체 재실행으로
   회귀 없음도 확인.
 
+### 발견된 gap: item_id 중복 시 패키지 봉인이 오염됨 (검증 가드로 임시 대응)
+
+5단계(코드 리뷰 단계, 새 기능 없음)에서 assembly.py를 검토하며 "같은 item_id를 가진 item이
+2개면 어떻게 되는가"를 실제로 재현해봤다 — 실제로 뒤섞인다는 것을 확인했다.
+
+**재현**: 같은 배송지에 item_id가 같은 item 2개를 주문 — 하나는 정상 피킹, 하나는
+`item_delay_reason="파손"`(재시도로도 해소 안 되는 사유 → `picking_delay_gate`가 3회 재시도 후
+`escalated=True`로 영구 확정, 끝까지 피킹되지 않음). 파이프라인을 끝까지 통과시키니 파손된
+(한 번도 피킹된 적 없는) item이 `item_status="배송완료"`와 `escalated=True`를 동시에 가진
+자기모순 상태로 끝까지 진행됐다.
+
+**원인**: `assembly.py`의 `_find_item()`이 `SourceItemRef → Item` 역참조를 `item_id` 하나로만
+한다(`next(item for item in item_list if item["item_id"] == ref["item_id"])`). item_id가
+유일하지 않으면 어떤 ref든 항상 리스트에서 "처음 매칭되는" item으로 해석돼버린다. 이 때문에
+`arrived_item_count` 계산에서 파손 item의 ref가 정상 item의 "피킹완료" 상태를 대신 물려받아
+`required==arrived`로 오판 → 조기 봉인. 일단 봉인되면 두 item이 같은 `package_ref`를 공유하므로
+추적agent/`mock_carrier_signal`의 lockstep 전진(원칙1에 따라 의도된 동작 — POC 단순화 4번)이
+파손 item까지 그대로 끌고 가 "배송완료"까지 도달시킨다. (`_lookup_package_delay_signal`
+(delay_gates.py)은 고정 딕셔너리를 item_id로 조회만 하므로 중복이 있어도 데이터가 섞이지는
+않음 — 문제는 assembly.py에 국한됨.)
+
+**판단 — 근본 해법(item_id와 분리된 `order_item_id` 도입)은 지금 범위에서 보류한다.**
+"같은 상품을 여러 개 주문"을 이 POC가 검증해야 할 핵심 시나리오로 볼 근거가 없다 — State 설계
+6원칙 어디에도 이 축은 없고, 지금까지의 데모 시나리오 11개도 전부 item_id 유일성을 전제로 짜여
+있다. 이 gap은 "새 기능이 빠진 것"이 아니라 "이미 전제하고 있던 불변조건(item_id는 주문 내에서
+유일하다)이 입력 단계에서 강제되지 않은 것"에 가깝다 — item_list에 quantity 필드가 없는 지금
+데이터 모델 자체가 "item 1행 = 물리적 유닛 1개"를 뜻하므로 item_id는 원래도 유일해야 맞다.
+`order_item_id`를 새로 신설하는 건 "item_id는 SKU/상품코드, order_item_id는 유닛 식별자"로
+개념을 쪼개는 모델링 결정이라 더 큰 설계 논의가 필요하고(예: entry.py가 호출자 입력과 무관하게
+항상 자체 유일 id를 발급하는 방향과, item_id를 남겨두되 매칭 키만 바꾸는 방향은 서로 다른
+결정), 지금 이 POC의 목적(핵심 패턴 시연)에 필요한 확장이 아니라고 판단했다.
+
+**대신 관문에서 막는다.** `order_validation_agent`에 item_id 중복 검사를 추가했다 — "주소록에
+없는 delivery_address_id"를 이미 여기서 걸러내던 것과 대칭 구조. 데모 시나리오 11개는 전부
+item_id가 유일해서 회귀 없음.
+
+**나중에 다시 열어볼 조건**: "수량>1로 같은 상품을 여러 개 주문"이 실제로 이 프로젝트의 핵심
+시나리오가 되는 시점(예: 온톨로지 단계에서 실제 커머스 데이터를 다루게 될 때) — 그때
+`order_item_id` 신설 여부를 다시 검토한다.
+
 ---
 
 ## 핵심 설계 원칙 (State 설계 시 계속 지켜온 기준)
@@ -607,6 +647,9 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 ---
 
 ## 아직 결정 안 된 것 / 다음에 확인할 것
+- `order_item_id`(item_id와 분리된 유닛 식별자) 신설 여부 — 지금은 `order_validation_agent`의
+  item_id 중복 검사로 임시 대응 중(상세: "발견된 gap: item_id 중복 시 패키지 봉인이 오염됨" 참고).
+  "동일 상품 복수 주문"이 이 프로젝트의 실제 검증 시나리오가 될 때 다시 열어볼 것
 - 조립대기게이트는 실제 경과시간이 아니라 `retry_count`(self-loop 진입 횟수)를 타임아웃 판단 기준으로 쓴다
   — 동기 실행되는 POC 데모에서 벽시계 시간 경과를 재현할 수 없어서 튜닝한 단순화. `join_waiting_since`는
   여전히 최초 대기 시각을 보존하는 기록용 필드로 남아있음 (판단=retry_count / 기록=join_waiting_since, 원칙3).

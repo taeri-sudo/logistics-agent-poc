@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping
 from typing import cast
 
@@ -41,6 +42,15 @@ def order_validation_agent(state: GraphState) -> GraphState:
             errors.append(
                 f"{item['item_id']}: delivery_address_id={item['delivery_address_id']} 참조 불가"
             )
+
+    # item_id 중복 검사 — assembly.py의 _find_item()이 item_id 하나로 SourceItemRef→Item을
+    # 역참조하는데, 유일하지 않으면 서로 다른 item이 하나로 뒤섞인다(실측 확인: DESIGN.md
+    # "item_id 중복" 항목 참고). 근본 해법(item_id와 분리된 order_item_id 신설)은 범위 밖이라
+    # 보류하고, 여기서 입력 단계에 막는 임시방편.
+    item_id_counts = Counter(item["item_id"] for item in order["item_list"])
+    dup_ids = sorted(item_id for item_id, count in item_id_counts.items() if count > 1)
+    if dup_ids:
+        errors.append(f"item_id 중복: {dup_ids}")
 
     passed = len(errors) == 0
     status = "통과" if passed else "실패"
