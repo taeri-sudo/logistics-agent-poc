@@ -1,4 +1,4 @@
-"""판단+반복 노드: 지연체크게이트 3종 — 출고전(Item)/조립대기(미봉인 Package)/배송중(봉인 Package).
+"""판단+반복 노드: 지연체크게이트 3종 — 피킹지연(Item)/조립대기(미봉인 Package)/배송중(봉인 Package).
 
 셋 다 같은 뼈대: 조건 미해소면 자기 자신으로 self-loop, retry_count가 최대 반복 횟수를
 넘으면 escalated=true로 표시하고 (비차단으로) 다음 단계로 진행한다.
@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import cast
 
+from logistics_agent.enums import ItemDelayReason
 from logistics_agent.nodes._common import _now
 from logistics_agent.nodes.supervisor import DelayRiskSignals, predict_delay_escalation
 from logistics_agent.state import GraphState, Item, OrderState, PackageState
@@ -18,7 +19,10 @@ POLICY_VERSION = "DELAY-POLICY-v1"
 
 # 데모용 고정 해소 시점 (실제로는 재고센서/외부 API 폴링 결과). retry_count가 이 값 이상이면 해소.
 # None이면 재시도로는 해소되지 않음 — 반드시 escalated=true로 귀결된다.
-_ITEM_RESOLVE_AT_RETRY: dict[str, int | None] = {
+# ItemDelayReason(Literal)이 늘어날 때 이 딕셔너리 등록을 깜빡하면 아래 룩업이 KeyError로 즉시
+# 죽는다 — 의도한 동작이다. .get()으로 조용히 넘기면 미등록 reason이 "파손"(resolve_at=None)과
+# 똑같이 취급돼 재시도만 소모하다 에스컬레이션되는데, 로그로는 등록 누락과 구분이 안 된다.
+_ITEM_RESOLVE_AT_RETRY: dict[ItemDelayReason, int | None] = {
     "재고부족": 2,
     "검수불량": 1,
     "파손": None,
@@ -47,8 +51,8 @@ def _lookup_package_delay_signal(pkg: PackageState) -> tuple[list[str], int | No
     return ([], None)
 
 
-def outbound_delay_gate(state: GraphState) -> GraphState:
-    """출고전게이트: item_delay_reason이 있는 item만 대상으로 해소 여부 재확인."""
+def picking_delay_gate(state: GraphState) -> GraphState:
+    """피킹지연게이트: item_delay_reason이 있는 item만 대상으로 해소 여부 재확인."""
     order = state["order"]
     item_list: list[Item] = list(order["item_list"])
     now = _now()
@@ -58,7 +62,7 @@ def outbound_delay_gate(state: GraphState) -> GraphState:
         if not reason or item["escalated"]:
             continue
 
-        resolve_at = _ITEM_RESOLVE_AT_RETRY.get(reason)
+        resolve_at = _ITEM_RESOLVE_AT_RETRY[reason]
         if resolve_at is not None and item["retry_count"] >= resolve_at:
             item_list[idx] = cast(
                 Item,
@@ -93,11 +97,11 @@ def outbound_delay_gate(state: GraphState) -> GraphState:
             print(f"  [재시도] item_id={item['item_id']} {reason} retry_count={new_retry}")
 
     order = cast(OrderState, {**order, "item_list": item_list})
-    print(f"[출고전게이트] 완료 - 미해소 지연 item {sum(1 for i in item_list if i['item_delay_reason'])}개")
+    print(f"[피킹지연게이트] 완료 - 미해소 지연 item {sum(1 for i in item_list if i['item_delay_reason'])}개")
     return {"order": order}
 
 
-def route_after_outbound_gate(state: GraphState) -> str:
+def route_after_picking_gate(state: GraphState) -> str:
     """조건분기: 해소 대기 중인(escalated 아닌) 지연 item이 남아있으면 재시도."""
     pending = any(
         item["item_delay_reason"] and not item["escalated"] for item in state["order"]["item_list"]
@@ -108,7 +112,7 @@ def route_after_outbound_gate(state: GraphState) -> str:
 def assembly_wait_gate(state: GraphState) -> GraphState:
     """조립대기게이트: 미봉인 Package를 감시만 한다 (순수 워처, 스스로 해소하지 않음).
 
-    실제 해소는 출고전게이트가 item_delay_reason을 풀고 패키지조립agent가 재봉인하는
+    실제 해소는 피킹지연게이트가 item_delay_reason을 풀고 패키지조립agent가 재봉인하는
     경로로만 일어난다 — 이 게이트에 진입했을 때 이미 봉인돼 있으면 그대로 통과.
     """
     packages: list[PackageState] = list(state.get("packages", []))
@@ -177,6 +181,7 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
                     **pkg,
                     "delay_categories": categories,
                     "escalated": True,
+                    "escalation_reasoning": "자연재해 감지로 즉시 에스컬레이션 (규칙 기반, Supervisor 미개입)",
                     "last_checked_at": now,
                     "policy_version_applied": POLICY_VERSION,
                 },

@@ -112,14 +112,14 @@ def run_demo() -> None:
 
     print()
     print("=" * 60)
-    print("시나리오 5: 재시도 후 통과 (출고전게이트: 재고부족 해소 / 배송중게이트: 교통지연 해소)")
+    print("시나리오 5: 재시도 후 통과 (피킹지연게이트: 재고부족 해소 / 배송중게이트: 교통지연 해소)")
     print("=" * 60)
     result_retry_pass = app.invoke(
         {
             "user_id": "user-001",
             "confirmed_order_items": [
                 {
-                    # 재고부족 → 출고전게이트가 2회 재시도 후 해소 → 피킹완료
+                    # 재고부족 → 피킹지연게이트가 2회 재시도 후 해소 → 피킹완료
                     "item_id": "SKU-102",
                     "delivery_address_id": "ADDR-OFFICE",
                     "item_delay_reason": "재고부족",
@@ -132,14 +132,14 @@ def run_demo() -> None:
 
     print()
     print("=" * 60)
-    print("시나리오 6: 재시도 초과 에스컬레이션 (출고전게이트→조립대기게이트 연쇄)")
+    print("시나리오 6: 재시도 초과 에스컬레이션 (피킹지연게이트→조립대기게이트 연쇄)")
     print("=" * 60)
     result_escalate_chain = app.invoke(
         {
             "user_id": "user-001",
             "confirmed_order_items": [
                 {
-                    # 파손 → 재시도로 영구 미해소 → 출고전게이트 3회 재시도 후 item escalated=true
+                    # 파손 → 재시도로 영구 미해소 → 피킹지연게이트 3회 재시도 후 item escalated=true
                     # → 패키지도 영원히 미봉인 → 조립대기게이트도 3회 재시도 후 package escalated=true
                     "item_id": "SKU-103",
                     "delivery_address_id": "ADDR-HOME",

@@ -13,10 +13,12 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
 
 - [x] 1단계: UserProfile조회 → 주문요청agent → 주문검증agent(조건분기) → Supervisor(더미) → 창고처리agent(placeholder)
 - [x] 2단계: 패키지조립agent (배송지 정규화 v11 + 중첩구조 타입 승격 v12)
-- [x] 3단계: 지연체크게이트 3종 (출고전/조립대기/배송중, self-loop 패턴, Item에 retry 필드 추가 v13)
+- [x] 3단계: 지연체크게이트 3종 (피킹지연/조립대기/배송중, self-loop 패턴, Item에 retry 필드 추가 v13)
 - [x] 4단계: 추적agent (범용 이벤트 수신 + 파생값 재계산) — 선행 조건으로 포장agent도 함께 구현
 - [x] 4단계 후속: split_delivery_preference를 패키지조립agent 그룹핑에 실제 반영, 시나리오9로 검증 완료
 - [x] 4단계 후속: Supervisor predict_delay_escalation (Google Gemini 실제 호출) 배송중게이트에 통합, 시나리오10 추가
+- [x] 4단계 후속: `_PACKAGE_DELAY_SIGNAL` 키를 `delivery_address_id`→`item_id`로 교체(POC단순화2번 해결), 시나리오11 추가
+- [x] 4단계 후속: 출고전게이트 → **피킹지연게이트**로 개명 (아래 "이름 변경" 참고)
 
 ## 다음에 할 문서 정리 (급하지 않음)
 - '확장 지점'과 '아직 결정 안 된 것' 두 섹션의 경계가 모호해지고 있음. 구분 기준(예: 확장지점=외부
@@ -59,17 +61,17 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
 
 ## 3단계 실행 결과 요약
 
-세 게이트를 `창고처리agent → 출고전게이트 → 패키지조립agent → 조립대기게이트 → 배송중게이트`
+세 게이트를 `창고처리agent → 피킹지연게이트 → 패키지조립agent → 조립대기게이트 → 배송중게이트`
 순서로 파이프라인에 삽입했다. 셋 다 "미해소면 자기 자신으로 self-loop, `retry_count`가
 `MAX_GATE_RETRIES`(3)를 넘으면 `escalated=True`로 표시하고 (비차단으로) 다음 단계 진행"이라는
 동일한 뼈대를 재사용한다. 데모 시나리오(main.py 4~7번)로 확인한 결과:
 
 - 시나리오4 (정상 통과): 지연 없는 주문 → 세 게이트 모두 self-loop 없이 1회 통과, `retry_count` 전부 0
-- 시나리오5 (재시도 후 통과): 재고부족 item이 출고전게이트에서 2회 재시도 후 해소(`item_delay_reason=None`,
+- 시나리오5 (재시도 후 통과): 재고부족 item이 피킹지연게이트에서 2회 재시도 후 해소(`item_delay_reason=None`,
   `item_status="피킹완료"`) → 정상 봉인 → 배송중게이트에서 해당 배송지(ADDR-OFFICE)의 "교통지연"이
   1회 재시도 후 해소(`delay_categories=[]`)
 - 시나리오6 (재시도 초과 에스컬레이션 — 연쇄): "파손"은 데모 매핑상 재시도로 해소되지 않도록 설계 →
-  출고전게이트가 3회 재시도 후 4번째 진입에서 item `escalated=True` → item은 끝내 피킹되지 않아
+  피킹지연게이트가 3회 재시도 후 4번째 진입에서 item `escalated=True` → item은 끝내 피킹되지 않아
   패키지도 `required=1, arrived=0`으로 영원히 미봉인 → 조립대기게이트도 3회 재시도 후 package
   `escalated=True`. 게이트1의 미해소가 게이트2의 에스컬레이션으로 그대로 이어지는 연쇄를 확인함
   (패키지가 미봉인 상태라 배송중게이트에는 아예 도달하지 않음 — 대상 필터가 `tracking_number is not None`이라 자연 스킵)
@@ -80,14 +82,15 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
 **설계 결정 — 조립대기게이트는 순수 워처.** 처음엔 게이트2가 스스로 "지연 아이템 도착"을 흉내 내고
 패키지조립agent로 되돌아가 재봉인시키는 2노드 사이클 안도 검토했으나, 그러면 게이트2만
 다른 두 게이트와 형태가 달라진다(진짜 self-loop가 아니라 게이트↔조립agent 사이클). 대신 게이트2는
-`tracking_number is None`인 패키지를 감시만 하고, 실제 해소는 항상 출고전게이트(1번)가
+`tracking_number is None`인 패키지를 감시만 하고, 실제 해소는 항상 피킹지연게이트(1번)가
 `item_delay_reason`을 풀어준 결과로 패키지조립agent의 다음 패스에서 자연스럽게 일어나도록 했다.
 그 결과 세 게이트가 완전히 동일한 "단일 노드 self-loop" 형태를 유지한다.
 
 **해소 판정은 전부 데모용 고정 매핑.** 실제 외부신호(재고센서, 물류사 API) 대신
-`item_delay_reason`별 해소 시점(`_ITEM_RESOLVE_AT_RETRY`), `delivery_address_id`별 지연신호
+`item_delay_reason`별 해소 시점(`_ITEM_RESOLVE_AT_RETRY`), `item_id`별 지연신호
 (`_PACKAGE_DELAY_SIGNAL`)를 고정 딕셔너리로 뒀다. `package_id`는 uuid라 데모 스크립트가 사전에
-못 박을 수 없어서, 배송중게이트의 매핑 키만 `package_id` 대신 `delivery_address_id`를 썼다 —
+못 박을 수 없어서, 배송중게이트의 매핑 키만 `package_id` 대신 `item_id`를 썼다(처음엔
+`delivery_address_id`를 썼다가 문제가 발견돼 교체함 — 상세: 아래 POC단순화 2번) —
 실제 구현이라면 패키지 자체의 속성(현재 위치, 배송 경로 등)으로 신호를 조회하겠지만 POC 범위 밖.
 
 **타임아웃은 실제 경과시간이 아니라 재시도(틱) 횟수로 근사.** `join_waiting_since`는 여전히
@@ -101,13 +104,13 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
 3단계 구현 과정에서 "지금 범위에서 굳이 풀 필요 없다"고 접어둔 것들. 나중에 4단계(추적agent)나
 실제 온톨로지/외부 신호 연동을 붙일 때 다시 열어봐야 한다.
 
-1. **출고전게이트가 창고처리agent 대신 item_status를 직접 갱신한다.** 원래 "피킹 완료" 전이는
+1. **피킹지연게이트가 창고처리agent 대신 item_status를 직접 갱신한다.** 원래 "피킹 완료" 전이는
    창고처리agent의 역할인데, 창고처리agent는 `current_item_index`를 이미 `len(item_list)`까지
    진행시켜버려서 재호출해도 스킵된 item을 다시 볼 방법이 없다 (2단계 코드 그대로 재사용).
-   그래서 출고전게이트가 해소를 확인하는 김에 `item_status="피킹완료"`/`customer_facing_status="준비중"`
+   그래서 피킹지연게이트가 해소를 확인하는 김에 `item_status="피킹완료"`/`customer_facing_status="준비중"`
    확정까지 직접 떠맡았다 — 관측(판단)과 액션(피킹 확정)이 한 노드에 섞인 상태.
    4단계에서 창고처리agent가 "지연 해소된 item만 재피킹"할 수 있게 재진입 가능해지면,
-   출고전게이트는 다시 순수 판단(해소 여부 체크)만 하고 액션은 창고처리agent로 돌려줘야 한다.
+   피킹지연게이트는 다시 순수 판단(해소 여부 체크)만 하고 액션은 창고처리agent로 돌려줘야 한다.
    **(4단계 착수 시점에 재확인 — 이번 범위에서는 그대로 보류하기로 결정.** 추적agent 작업과
    결합할 이유가 없어 별도 리팩터로 남겨둠.)
 2. **[해결됨] 배송중게이트의 지연 감지가 실제 물류 신호가 아니라 고정 매핑
@@ -141,12 +144,23 @@ TypedDict를 쓰면서 반복적으로 나던 Pylance 경고 3종을 원인별�
    에스컬레이션. 기존 시나리오3/5/6/7/9/10 전체 재실행으로 회귀 확인 완료 — 유일한 차이는
    시나리오3의 `ADDR-OFFICE` 패키지가 더 이상 시나리오5의 신호를 잘못 물려받지 않는다는 것
    (원래 시나리오3의 의도였던 재고부족 해소 검증 자체는 그대로 통과).
+
+   **부가 발견 — dead code 확인**: `in_transit_delay_gate`의 "지연이 사라지는" 분기
+   (`if not categories: if pkg["delay_categories"]: ...`)는 현재 코드에서 도달 불가능(dead code)함을
+   실측으로 확인함(임시 프로브 삽입 후 시나리오 1~11 전체 실행, 단 한 번도 히트 안 됨). 원인은
+   `_lookup_package_delay_signal()`이 고정 딕셔너리(`_PACKAGE_DELAY_SIGNAL`)와 패키지 봉인 시점에
+   고정되는 `source_items`만으로 결정되는 순수함수라, 한 번 반환된 `categories` 값이 그 패키지에
+   대해 절대 바뀌지 않기 때문 — "이전 틱엔 지연이 있었는데 이번 틱엔 사라졌다"는 상황 자체가
+   논리적으로 발생할 수 없다(실제 지연 해소는 이 분기가 아니라 바로 아래 `resolve_at`/`retry_count`
+   기반 분기가 전담). 버그는 아니다 — 실제 물류사 API/GPS 폴링으로 교체되면(외부 시스템이
+   `resolve_at` 카운터와 무관하게 스스로 신호를 거둬들이는 경우 대비) 살아나는 방어 코드로
+   의도적으로 남겨둔다.
 3. **조립대기게이트/배송중게이트가 실제 경과시간이 아니라 `retry_count`(self-loop 진입 횟수,
    즉 "틱")를 기준으로 판단한다.** `join_waiting_since`(조립대기)는 최초 대기 시각을 기록만 할 뿐
    실제 타임아웃 판정에는 관여하지 않는다. 동기 실행되는 POC 데모에서는 벽시계 시간이 흐르지
    않아 tick 수로 대체할 수밖에 없었음 — 실제 서비스라면 폴링 주기 × 경과 tick 환산이나
    `datetime.now() - join_waiting_since`와 임계값 비교로 바꿔야 한다.
-4. **추적agent가 봉인된 패키지들을 lockstep으로 함께 전진시킨다.** 출고전게이트가 패키지조립agent
+4. **추적agent가 봉인된 패키지들을 lockstep으로 함께 전진시킨다.** 피킹지연게이트가 패키지조립agent
    진입 전에 모든 지연을 이미 해소/에스컬레이션해버리므로, 한 번의 그래프 실행에서 봉인되는
    패키지들은 전부 같은 시점에 추적agent 루프에 진입해 같은 틱마다 함께 한 단계씩 전진한다.
    실제로는 캐리어마다, 패키지마다 이벤트 도착 시각이 다르므로 서로 다른 배송지의 두 패키지가
@@ -251,7 +265,7 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
   노드를 늘리는 것보다 낫다고 판단(CLAUDE.md의 "새 노드보다 흡수" 원칙).
 - **적용 범위는 배송중게이트만.** "남은 재고부족 item 수" 같은 입력 신호는 Item을 가로지르는
   집계값이지만, 그 집계는 배송중게이트 안에서 `order["item_list"]`를 보고 계산한다 — 별도로
-  출고전게이트에도 붙이지 않았다(범위를 좁게 유지).
+  피킹지연게이트에도 붙이지 않았다(범위를 좁게 유지).
 - **기존 고정 임계치(retry_count>MAX_GATE_RETRIES)를 대체하지 않고, 그 앞에 조기 에스컬레이션
   경로를 추가했다.** Supervisor가 "아직 지켜봐도 됨"(escalate_now=false)이라고 하면 기존
   로직으로 그대로 폴백한다. 이 덕분에 LLM 호출이 실패해도(키 누락/네트워크 오류) 안전망이
@@ -263,7 +277,7 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 - **"주문 생성 이후 경과 시간"을 의미 있게 만들려고 `order_created_at_hint`를 추가했다.**
   동기 실행되는 데모에서는 주문 생성～게이트 진입까지 항상 몇 밀리초라 실제 시각을 쓰면
   이 신호가 사실상 죽은 값이 된다 — 데모에서 과거 시각을 강제할 방법이 필요해서 넣었다.
-- **"남은 재고부족 item 수" 신호는 구조상 대부분 0으로 읽힌다.** 출고전게이트가 패키지조립agent
+- **"남은 재고부족 item 수" 신호는 구조상 대부분 0으로 읽힌다.** 피킹지연게이트가 패키지조립agent
   진입 *전에* 모든 item의 지연을 이미 해소/에스컬레이션해버리기 때문에(3단계 설계), 배송중게이트가
   실행되는 시점엔 "재고부족"으로 남아있는 item이 있을 수 없다(재고부족은 `_ITEM_RESOLVE_AT_RETRY`상
   retry_count=2에서 항상 해소되도록 고정돼 있어서 escalated로 영구히 남지도 않음). 틀린 값이
@@ -280,7 +294,28 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
   1틱 더 기다렸을 상황을 Supervisor가 실제로 앞당겨 잡아낸 것을 확인했다. 다만 이건 한 번의
   관측일 뿐 매 실행마다 같은 결과가 보장되지는 않는다(비결정론은 여전함).
 
-### 버그 수정: 출고전게이트가 지연 중에도 customer_facing_status를 안 바꾸던 gap
+### 이름 변경: 출고전게이트 → 피킹지연게이트
+
+`outbound_delay_gate`(출고전게이트)라는 이름이 실제 역할보다 넓게 들린다는 지적이 나와 검토했다.
+
+**문제**: "출고전"(pre-dispatch)은 "아직 출고되지 않은 모든 단계"를 아우르는 것처럼 들리지만,
+실제 이 게이트가 체크하는 건 `item_delay_reason`(재고부족/검수불량/파손) 하나뿐이다 —
+전부 **피킹 단계에서 실패하는 사유**다. 그래프 상 위치도 창고처리agent(피킹) 바로 다음,
+패키지조립agent 바로 전으로 고정돼 있어서 "출고전"이 암시하는 더 넓은 범위(예: 포장 단계
+이슈)를 실제로 커버할 여지가 구조적으로 없다 — 이 자리는 오직 피킹 지연만 체크하는 자리다.
+형제 게이트인 조립대기게이트/배송중게이트는 이미 "지금 무슨 상태를 감시하는가"를 이름에
+직접 담고 있는데(조립대기 = 미봉인 패키지 상태, 배송중 = 봉인 후 이동 상태), 출고전게이트만
+"단계 이전"이라는 시점 표현을 쓰고 있어 형제 게이트들과도 이름 짓는 방식이 어긋나 있었다.
+
+**결정**: `outbound_delay_gate` → `picking_delay_gate`(피킹지연게이트)로 개명.
+`route_after_outbound_gate` → `route_after_picking_gate`도 함께. 로직 변경은 없음 —
+순수 리네이밍이라 이 문서의 이후 서술에서도 전부 새 이름으로 통일한다(과거 시점을 서술하는
+문장도 포함 — 코드에 더 이상 존재하지 않는 옛 이름을 문서에 남겨두면 나중에 grep했을 때
+혼란만 남기기 때문).
+
+**검증**: `pyright` 0 errors. 시나리오 1~11 전체 재실행, 정규화 diff로 회귀 없음 확인.
+
+### 버그 수정: 피킹지연게이트가 지연 중에도 customer_facing_status를 안 바꾸던 gap
 
 `item_delay_reason`이 있는 동안(재시도 중이든, 영구 에스컬레이션됐든) `customer_facing_status`가
 계속 `"주문접수"`에 머물러 있던 걸 발견했다 — entry.py가 준 초기값이 한 번도 안 바뀐 채였다.
@@ -292,13 +327,13 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 아니라 그냥 놓친 코드였고, 사용자에게 실질적으로 잘못된 정보(지연되고 있는데 "주문접수"로만
 보임)를 노출하는 gap이라 판단을 미룰 이유가 없었다.
 
-- **수정**: `outbound_delay_gate`의 재시도/에스컬레이션 분기(`delay_gates.py`)에
+- **수정**: `picking_delay_gate`의 재시도/에스컬레이션 분기(`delay_gates.py`)에
   `"customer_facing_status": "지연"`을 추가. 해소 시 기존처럼 `"준비중"`으로 복귀하는 로직은
   그대로 뒀다.
-- **검증**: `outbound_delay_gate`를 격리 호출해서 재고부족(해소되는 케이스)과 파손(영구
+- **검증**: `picking_delay_gate`를 격리 호출해서 재고부족(해소되는 케이스)과 파손(영구
   에스컬레이션되는 케이스) 둘 다 틱 단위로 확인 — 재시도 중엔 `"지연"`, 해소되면 `"준비중"`으로
   정확히 전이했고, 에스컬레이션된 뒤에는 더 이상 갱신되지 않으므로(에스컬레이션된 item은
-  `outbound_delay_gate`가 다음 틱부터 건너뜀) `"지연"`이 그대로 유지되는 것도 확인했다 — 이건
+  `picking_delay_gate`가 다음 틱부터 건너뜀) `"지연"`이 그대로 유지되는 것도 확인했다 — 이건
   의도한 동작이다(더 이상 자동으로 바뀔 이유가 없는 최종 신호). 시나리오3/5/6 전체 재실행으로
   회귀 없음도 확인.
 
@@ -378,6 +413,34 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 다시 State에 반영하는 구조여야 한다. 즉 경로B는 "배송중게이트 안에 또 하나의 분기"로 만들 수
 있는 게 아니라, 이 그래프와는 완전히 별도로 설계해야 하는 컴포넌트다.
 
+### 지연 사유의 세 계층 — 새 decision_type 후보
+
+`delay_gates.py`를 검토하다가 "지연 사유"라고 뭉뚱그려 부르던 것이 실제로는 대응 방식이
+완전히 다른 세 계층이라는 걸 발견했다:
+
+1. **결정화된 규칙** (재고부족/검수불량 등) — 해소 시점이 경험적으로 고정 가능한 예외.
+   고정 딕셔너리(`_ITEM_RESOLVE_AT_RETRY`)로 처리. Supervisor(판단)가 필요 없다 — 위
+   "'재고부족' 개념의 세 가지 층위"의 층위2와 같은 것.
+2. **예측 영역** (교통지연 등) — 정상적인 지연이지만 해소 시점이 불확실해서 규칙표로 못
+   박기보다 예측이 맞는 영역. `predict_delay_escalation`이 담당.
+3. **정상 흐름 자체가 깨지는 재난/예외 상황** (전쟁, 대규모 재해 등) — 위 둘과 근본적으로
+   다르다. 고정 딕셔너리에 미리 등록하는 방식 자체가 안 맞는다 — 이런 사유는 애초에 전부
+   나열할 수 없고, 나열을 시도하는 것 자체가 잘못된 전제다. "등록 안 된 사유를 만나면
+   자동으로 사람 개입 경로(위 "사람 개입 경로의 구조적 한계" 참고, 경로B — 지금은 미구현)로
+   넘기는 fallback"이 필요하다는 뜻.
+
+   **별도 decision_type 후보로 남겨둔다: `assess_disruption_severity`(가칭).**
+   `predict_delay_escalation`과 목적이 다르다 — 후자는 "정상적인 지연이 언제 해소될지"를
+   예측하는 것이고, 이건 **"정상 흐름 자체가 지금도 유효한 전제인지"를 재판단**하는 것이다.
+   같은 Supervisor 개념 아래 있어도 입력·출력·트리거 시점이 다른 별개의 판단이라 기존
+   decision_type에 욱여넣지 않는다 — "아직 결정 안 된 것"의 "decision_type이 늘어나면 이
+   패턴이 계속 맞을지 다시 볼 것"이 예고했던 바로 그 확장 사례.
+
+   지금 `_PACKAGE_DELAY_SIGNAL`의 `"자연재해"`는 사실 이 계층3에 속하는데, 아직 fallback이
+   없어서 계층1처럼 고정 딕셔너리에 미리 등록해두고 즉시 에스컬레이션시키는 방식으로
+   임시 처리돼 있다(시나리오7/11) — 임시 처리가 지금까지는 통했던 이유는 데모가 "어떤 재난이
+   일어날지"를 미리 알고 스크립트를 짜기 때문이지, 실제로 계층3에 맞는 방식이라서가 아니다.
+
 ---
 
 ## 노드 목록 (최종)
@@ -388,17 +451,17 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 | 진입 | 주문요청agent | 이벤트 | 확정된 주문내역(장바구니 아님)으로 item_list 생성 |
 | 관문 | 주문검증agent | 조건분기 | payment_status, 배송지 검증 → 통과/실패 (빈 주소록/`delivery_address_id=""` 케이스는 격리 테스트로 실패 처리 확인 완료, 별도 시나리오 미추가) |
 | 판단 | Supervisor | LLM 판단 | "Supervisor"는 그래프 노드/함수 하나의 이름이 아니라 decision_type들을 아우르는 개념(`supervisor.py`). **decide_warehouse_entry**(decision_type=proceed_to_warehouse, 그래프 노드 자체, 규칙만으로 결정돼 아직 더미) / **predict_delay_escalation**(Google Gemini 실제 호출, 배송중게이트가 함수로 직접 호출 — 별도 그래프 노드 아님, 판단+근거텍스트를 SupervisorPrediction으로 반환) |
-| 반복 | 창고처리agent | 조회+액션 (내장 루프) | item_list 순회, Sensor(위치확인)→Action(피킹). 예외(item_delay_reason)는 피킹만 스킵하고 그대로 넘김 — 해소는 출고전게이트가 담당, Supervisor는 이 경로에 관여하지 않음 |
+| 반복 | 창고처리agent | 조회+액션 (내장 루프) | item_list 순회, Sensor(위치확인)→Action(피킹). 예외(item_delay_reason)는 피킹만 스킵하고 그대로 넘김 — 해소는 피킹지연게이트가 담당, Supervisor는 이 경로에 관여하지 않음 |
 | 집계 | 패키지조립agent | 조건카운트 | `package_ref`가 없는 item을 `delivery_address_id` 기준으로 묶음(`split_delivery_preference=true`면 같은 배송지도 item별로 분리). 같은 배송지의 미봉인 패키지가 있으면 합류(분리배송이면 항상 신규). required/arrived count 체크, 충족시 봉인+tracking_number 발급. (구 Join노드 흡수) |
 | 액션 | 포장agent | 액션 | 포장 완료 처리 (Package 단위 일괄, "포장중" 중간상태는 item 레벨엔 없음) |
-| 판단+반복 | 출고전게이트 | self-loop 조건분기 | Item 기반. `item_delay_reason` 있는 item만 대상, 해소되면 피킹완료 확정, 미해소면 자기루프, retry_count 초과시 item escalated=true |
-| 판단+반복 | 조립대기게이트 | self-loop 조건분기 (순수 워처) | 미봉인 Package(`tracking_number is None`) 기반. 스스로 해소하지 않고 감시만 함 — 실제 해소는 출고전게이트+패키지조립agent 재봉인으로 일어남. retry_count 초과시 package escalated=true |
+| 판단+반복 | 피킹지연게이트 | self-loop 조건분기 | Item 기반. `item_delay_reason` 있는 item만 대상, 해소되면 피킹완료 확정, 미해소면 자기루프, retry_count 초과시 item escalated=true |
+| 판단+반복 | 조립대기게이트 | self-loop 조건분기 (순수 워처) | 미봉인 Package(`tracking_number is None`) 기반. 스스로 해소하지 않고 감시만 함 — 실제 해소는 피킹지연게이트+패키지조립agent 재봉인으로 일어남. retry_count 초과시 package escalated=true |
 | 판단+반복 | 배송중게이트 | self-loop 조건분기 | 봉인된 Package(`tracking_number` 있음) 기반. `delay_categories` 체크(외부신호/폴링 데모는 고정 매핑), 자연재해는 재시도 없이 즉시 escalated=true. 그 외 지연은 매 틱마다 먼저 Supervisor(predict_delay_escalation)에게 조기 에스컬레이션 여부를 묻고, "아직 지켜봐도 됨"이면 기존 retry_count 초과시 escalated=true 임계치로 폴백 |
 | 액션 | mock_carrier_signal | 액션 (POC 전용 신호 발생기) | 봉인된 Package를 `포장완료→출고됨→배송중→배송완료` 고정 시퀀스로 전진시키고 GPS placeholder 채움. 실제 서비스에서는 택배사 웹훅/Kafka 이벤트가 이 자리를 대체 |
 | 판단+반복 | 추적agent | self-loop 조건분기 + 파생 재계산 | 신호를 만들지 않고 현재 item_status/delay_categories만 보고 Order 파생값(internal_order_status, customer_facing_status) 재계산, 배송완료 도달 여부 판단 → 도달시 종료, 아니면 mock_carrier_signal로 재진입 |
 | 부가 | 알림agent | 조건부 발송 (비차단) | notification_enabled 확인 후 notification_log에 기록. 워크플로우를 막지 않음 |
 
-**구현 현황**: UserProfile조회 / 주문요청 / 주문검증 / Supervisor(더미) / 창고처리 / 출고전게이트 / 패키지조립 /
+**구현 현황**: UserProfile조회 / 주문요청 / 주문검증 / Supervisor(더미) / 창고처리 / 피킹지연게이트 / 패키지조립 /
 포장 / 조립대기게이트 / 배송중게이트 / mock_carrier_signal / 추적agent = 구현됨(`logistics_agent/nodes/`).
 알림agent = **설계만 있고 코드 없음** (다음 단계).
 
@@ -423,7 +486,7 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 >
 > v12 → v13 변경: **3단계 지연체크게이트를 위해 `Item`에 4필드 추가**
 > (`policy_version_applied`, `last_checked_at`, `retry_count`, `escalated`) — `PackageState`의 동명 필드와
-> 대칭시켜 출고전게이트가 Item 층위에서도 같은 self-loop 판단 뼈대를 쓸 수 있게 함. 이 참에 `PackageState.retry_count`의
+> 대칭시켜 피킹지연게이트가 Item 층위에서도 같은 self-loop 판단 뼈대를 쓸 수 있게 함. 이 참에 `PackageState.retry_count`의
 > 의미도 명확히 함: "Supervisor 재시도 조치 횟수"가 아니라 **지연체크게이트의 self-loop 진입(폴링) 횟수**로 실제 쓰임
 > (문서만 갱신, 필드 자체는 원래도 이 용도로 예약돼 있었음).
 >
@@ -481,10 +544,10 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 | package_ref | string/null | 소속 Package (조립 전 null) |
 | delivery_address_id | string | Order.delivery_addresses 중 하나 참조. **패키지조립agent의 그룹핑 키** |
 | location | Location/null | 창고 내 위치, 포장 전까지만 유효. 아래 Location 참고 |
-| customer_facing_status | string(enum) | 파생값. item_status를 사용자용으로 매핑. item_delay_reason이 있는 동안(재시도/에스컬레이션 불문)은 출고전게이트가 "지연"으로 덮어씀 |
+| customer_facing_status | string(enum) | 파생값. item_status를 사용자용으로 매핑. item_delay_reason이 있는 동안(재시도/에스컬레이션 불문)은 피킹지연게이트가 "지연"으로 덮어씀 |
 | policy_version_applied | string/null | v13 신설. 지연 감지 당시 적용 정책 버전 (PackageState 동명 필드와 대칭) |
-| last_checked_at | timestamp/null | v13 신설. 출고전게이트 폴링 기록. 지연 이력이 없으면 null |
-| retry_count | int | v13 신설. 출고전게이트 self-loop 진입 횟수 |
+| last_checked_at | timestamp/null | v13 신설. 피킹지연게이트 폴링 기록. 지연 이력이 없으면 null |
+| retry_count | int | v13 신설. 피킹지연게이트 self-loop 진입 횟수 |
 | escalated | bool | v13 신설. 사람 개입 필요 여부. true여도 백그라운드 자동처리는 계속(비차단) |
 
 ### Package State
@@ -502,7 +565,7 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 | last_checked_at | timestamp | 모니터링 폴링 기록 |
 | retry_count | int | 지연체크게이트(조립대기게이트/배송중게이트)의 self-loop 진입(폴링) 횟수 |
 | escalated | bool | 사람 개입 필요 여부. true여도 백그라운드 자동처리는 계속(비차단) |
-| escalation_reasoning | string/null | v15 신설. Supervisor(predict_delay_escalation)의 판단 근거 텍스트 — 설명가능성. 해소/지연없음 전이 시 null로 복귀 |
+| escalation_reasoning | string/null | v15 신설. escalated=true로 만든 근거 텍스트 — 설명가능성. 대부분 Supervisor(predict_delay_escalation)의 판단 근거지만, 자연재해 즉시 에스컬레이션(Supervisor 미개입, 고정 규칙)은 그 사실 자체를 알 수 있는 고정 문자열("자연재해 감지로 즉시 에스컬레이션 (규칙 기반, Supervisor 미개입)")을 남긴다 — 나중에 이 필드만 보고도 "이게 LLM 판단인지 규칙인지" 구분 가능. 해소/지연없음 전이 시 null로 복귀 |
 | join_waiting_since | timestamp/null | 패키지 조립 무한대기 방지용 타임아웃 기준. **첫 대기 시각 보존** (재진입 시 덮어쓰지 않음), 봉인 시 null로 복귀 |
 | notification_log | list[NotificationEntry] | {stage, sent_at, enabled_at_time} — 판단 아닌 기록 |
 
@@ -567,7 +630,7 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
   더미 판단을, 실제 조회 결과 기반 판단으로 교체하는 것과 같은 방향 — `predict_delay_escalation`이
   이미 "이상 신호가 있을 때만 LLM 개입"이라는 같은 패턴을 배송중게이트에서 쓰고 있어 선례로
   참고할 수 있다.
-- 출고전게이트가 여전히 창고처리agent 대신 item_status를 직접 확정한다 (POC 단순화 1번) — 창고처리agent
+- 피킹지연게이트가 여전히 창고처리agent 대신 item_status를 직접 확정한다 (POC 단순화 1번) — 창고처리agent
   재진입성 리팩터는 4단계에서도 의도적으로 보류, 다음 단계 후보
 - 알림agent 미착수 — notification_enabled 필드는 이미 있음 (notification_log 관련은 아래
   "미구현/죽은 필드 종합" 참고)
@@ -608,7 +671,7 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 2. **수량체크 오류로 인한 재고부족** (현재 워크플로우가 다루는 것) — 창고에서 실제로 피킹하려는
    순간 발견되는, 결정화된 규칙으로 처리 가능한 예외. Supervisor(판단)가 필요 없다 —
    `item_delay_reason="재고부족"`이 있으면 창고처리agent는 피킹만 스킵하고, 해소/재시도/
-   영구 에스컬레이션 판단은 출고전게이트가 고정 로직(`_ITEM_RESOLVE_AT_RETRY`, retry_count
+   영구 에스컬레이션 판단은 피킹지연게이트가 고정 로직(`_ITEM_RESOLVE_AT_RETRY`, retry_count
    임계치)으로 전담한다. **지금 코드가 정확히 이 층위를 다루고 있고, 이게 맞는 설계였음을
    재확인했다** — 창고처리agent가 이 예외를 만나 Supervisor를 부르지 않는 것은 문서 오류가
    아니라 의도된 설계다(위 창고처리agent 행 정정 참고).
@@ -644,7 +707,7 @@ Supervisor 판단을 억지로 끼워 넣거나, 층위3(예측)을 이 워크�
 
 ## 확장 지점 (지금 범위 밖, 문서에만 남김)
 - 판매량 예측 기반 재고 확보(사전 발주/보충) — "재고부족" 개념의 세 층위 중 층위3(위 참고).
-  이 주문 워크플로우의 예외 처리(층위2, 출고전게이트가 이미 담당)와는 다른 책임 — 별도 상위
+  이 주문 워크플로우의 예외 처리(층위2, 피킹지연게이트가 이미 담당)와는 다른 책임 — 별도 상위
   시스템(재고관리/배치성 수요예측) 영역
 - Kafka/Confluent/ClickHouse 등 실제 스트리밍 인프라 — POC에서는 간단한 신호 발생기(`mock_carrier_signal`)로 대체함
 - Unity Catalog류 거버넌스 계층 — Neo4j(온톨로지)와는 별개로, 데이터/툴 접근 통제용으로 향후 고려

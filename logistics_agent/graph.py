@@ -1,5 +1,5 @@
 """LangGraph 최소 골격 — UserProfile → 주문요청 → 검증 → decide_warehouse_entry → 창고처리
-→ 출고전게이트 → 패키지조립 → 포장 → 조립대기게이트 → 배송중게이트 → mock_carrier_signal → 추적."""
+→ 피킹지연게이트 → 패키지조립 → 포장 → 조립대기게이트 → 배송중게이트 → mock_carrier_signal → 추적."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from logistics_agent.nodes.assembly import package_assembly_agent
 from logistics_agent.nodes.delay_gates import (
     assembly_wait_gate,
     in_transit_delay_gate,
-    outbound_delay_gate,
+    picking_delay_gate,
     route_after_assembly_wait_gate,
     route_after_in_transit_gate,
-    route_after_outbound_gate,
+    route_after_picking_gate,
 )
 from logistics_agent.nodes.entry import order_request_agent, user_profile_lookup
 from logistics_agent.nodes.packaging import packaging_agent
@@ -31,7 +31,7 @@ def build_graph():
     graph.add_node("order_validation_agent", order_validation_agent)
     graph.add_node("decide_warehouse_entry", decide_warehouse_entry)
     graph.add_node("warehouse_processing_agent", warehouse_processing_agent)
-    graph.add_node("outbound_delay_gate", outbound_delay_gate)
+    graph.add_node("picking_delay_gate", picking_delay_gate)
     graph.add_node("package_assembly_agent", package_assembly_agent)
     graph.add_node("packaging_agent", packaging_agent)
     graph.add_node("assembly_wait_gate", assembly_wait_gate)
@@ -48,11 +48,11 @@ def build_graph():
         {"supervisor": "decide_warehouse_entry", "end": END},
     )
     graph.add_edge("decide_warehouse_entry", "warehouse_processing_agent")
-    graph.add_edge("warehouse_processing_agent", "outbound_delay_gate")
+    graph.add_edge("warehouse_processing_agent", "picking_delay_gate")
     graph.add_conditional_edges(
-        "outbound_delay_gate",
-        route_after_outbound_gate,
-        {"retry": "outbound_delay_gate", "proceed": "package_assembly_agent"},
+        "picking_delay_gate",
+        route_after_picking_gate,
+        {"retry": "picking_delay_gate", "proceed": "package_assembly_agent"},
     )
     graph.add_edge("package_assembly_agent", "packaging_agent")
     graph.add_edge("packaging_agent", "assembly_wait_gate")
