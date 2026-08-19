@@ -1,4 +1,4 @@
-"""State 스키마 v13 — LangGraph GraphState 정의."""
+"""State 스키마 v15 — LangGraph GraphState 정의."""
 
 from __future__ import annotations
 

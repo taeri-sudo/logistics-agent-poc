@@ -42,6 +42,9 @@ def _find_item(item_list: list[Item], order_id: str, ref: SourceItemRef) -> Item
     # 일어난다는 걸 보장하는 방어 체크 — 불일치하면 데이터 오류이므로 None 반환.
     if ref["order_id"] != order_id:
         return None
+    # item_id 하나로만 매칭 — 주문 내 item_id 유일성은 order_validation_agent가 관문에서
+    # 보장한다(중복이면 검증 실패로 여기까지 못 옴). 검증agent가 없었다면 next()가 항상 첫 매칭만
+    # 반환해 서로 다른 item이 뒤섞인다(실측 확인: DESIGN.md "item_id 중복" 항목 참고).
     return next((item for item in item_list if item["item_id"] == ref["item_id"]), None)
 
 
@@ -111,7 +114,12 @@ def package_assembly_agent(state: GraphState) -> GraphState:
             f"→ {package['package_id']} ({origin})"
         )
 
-    # 미봉인 패키지 전체 재계산 (이번에 안 건드린 것도 — 3단계 self-loop 재진입 대비)
+    # 미봉인 패키지 전체 재계산. 이 노드는 self-loop가 아니라(graph.py에서 되돌아오는 edge
+    # 없음) 주문당 정확히 1회만 실행되므로 "이번에 안 건드린 패키지"는 사실 없다 — groups
+    # 순회로 이번 호출에서 만들어진 패키지 전부가 여기 다시 걸린다. 그래도 groups 루프와
+    # 분리해 전체를 훑는 이유는 필드 갱신(required/arrived count, 봉인 판정)을 그룹핑 로직과
+    # 독립된 관심사로 유지하기 위함 — 그룹핑은 "누가 어디에 배정되는가", 이 루프는 "배정된
+    # 것들이 봉인 조건을 만족하는가"로 역할이 다르다.
     sealed = 0
     waiting = 0
     for pos, package in enumerate(packages):
