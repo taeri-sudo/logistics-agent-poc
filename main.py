@@ -291,18 +291,31 @@ def _print_result(state: dict) -> None:
         "supervisor_decision": state.get("supervisor_decision"),
         "order": {
             "order_id": order.get("order_id"),
+            "order_created_at": order.get("order_created_at"),
             "internal_order_status": order.get("internal_order_status"),
             "payment_status": order.get("payment_status"),
             "fulfillment_preference_on_delay": order.get("fulfillment_preference_on_delay"),
+            "cancel_requested_at": order.get("cancel_requested_at"),
+            "cancel_status": order.get("cancel_status"),
             "delivery_addresses": [
-                {"address_id": addr["address_id"], "address_line": addr["address_line"]}
+                {
+                    "address_id": addr["address_id"],
+                    "recipient": addr["recipient"],
+                    "phone": addr["phone"],
+                    "postal_code": addr["postal_code"],
+                    "address_line": addr["address_line"],
+                }
                 for addr in order.get("delivery_addresses", [])
             ],
             "item_list": order.get("item_list"),
+            "current_item_index": order.get("current_item_index"),
+            "notification_enabled": order.get("notification_enabled"),
+            "trace_id": order.get("trace_id"),
         },
         "packages": [
             {
                 "package_id": pkg["package_id"],
+                "source_items": pkg["source_items"],
                 "delivery_address_id": pkg["delivery_address_id"],
                 "required_item_count": pkg["required_item_count"],
                 "arrived_item_count": pkg["arrived_item_count"],
@@ -311,9 +324,11 @@ def _print_result(state: dict) -> None:
                 "join_waiting_since": pkg["join_waiting_since"],
                 "delay_categories": pkg["delay_categories"],
                 "retry_count": pkg["retry_count"],
+                "last_checked_at": pkg["last_checked_at"],
                 "compensation": pkg["compensation"],
                 "escalation_reasoning": pkg["escalation_reasoning"],
                 "policy_version_applied": pkg["policy_version_applied"],
+                "notification_log": pkg["notification_log"],
             }
             for pkg in state.get("packages", [])
         ],
