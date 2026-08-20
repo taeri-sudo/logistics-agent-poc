@@ -297,7 +297,7 @@ class CompensationRecord(TypedDict):
 | 관문 | 주문검증agent | 조건분기 | payment_status, 배송지 검증 → 통과/실패 |
 | 판단 | Supervisor | LLM 판단 | "Supervisor"는 그래프 노드/함수 하나의 이름이 아니라 decision_type들을 아우르는 개념(`supervisor.py`). **decide_warehouse_entry**(decision_type=proceed_to_warehouse, 그래프 노드 자체, 규칙만으로 결정돼 아직 더미) / **predict_delay_escalation**(Google Gemini 실제 호출, 배송중게이트가 함수로 직접 호출 — 별도 그래프 노드 아님, 판단+근거텍스트를 SupervisorPrediction으로 반환) |
 | 반복 | 창고처리agent | 조회+액션 (내장 루프) | item_list 순회, Sensor(위치확인)→Action(피킹). 예외(item_delay_reason)는 피킹만 스킵하고 그대로 넘김 — 해소는 피킹지연게이트가 담당 |
-| 집계 | 패키지조립agent | 조건카운트 | `package_ref`가 없고 Stage1 판정으로 영구 제외되지 않은 item(`_is_assembly_eligible`)을 `delivery_address_id` 기준으로 묶음. 같은 배송지의 미봉인 패키지가 있으면 합류. required/arrived count 체크, 충족시 봉인+tracking_number 발급 |
+| 집계 | 패키지조립agent | 조건카운트 | `package_ref`가 없고 Stage1 판정으로 영구 제외되지 않은 item(`_is_assembly_eligible`)을 `delivery_address_id` 기준으로 묶음. 같은 배송지의 미봉인 패키지가 있으면 합류(단 v16 이후에도 여전히 그래프 구조상 dead code — JOURNAL.md 6단계 후속 참고). required/arrived count 체크, 충족시 봉인+tracking_number 발급 |
 | 액션 | 포장agent | 액션 | 포장 완료 처리 (Package 단위 일괄, "포장중" 중간상태는 item 레벨엔 없음) |
 | 판단+반복 | 피킹지연게이트 | self-loop 조건분기 + Stage1 자동판정 | Item 기반. `item_delay_reason` 있는 item만 대상, 해소되면 피킹완료 확정, 미해소면 자기루프. retry_count 초과 시 Stage1 판정(`_ITEM_RECOVERABLE`)으로 즉시 귀결 — 회복불가(파손)면 품목취소, 회복가능(재고부족/검수불량/통관지연)이면 `fulfillment_preference_on_delay`로 부분수령/계속대기 자동 적용 (v16) |
 | 판단+반복 | 조립대기게이트 | self-loop 조건분기 (순수 워처) | 미봉인 Package(`tracking_number is None`) 기반. 스스로 해소하지 않고 감시만 함 — 실제 해소는 피킹지연게이트+패키지조립agent 재봉인으로 일어남. retry_count 초과시 보상조치(환불) 실행 (v16, 舊 escalated=true) |

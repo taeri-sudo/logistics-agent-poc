@@ -434,6 +434,29 @@ assembly.py를 검토하며 "같은 배송지의 미봉인 패키지가 있으�
 `package_assembly_agent`가 줄어든 required count로 재봉인해야 하므로, "합류" 로직이 다시
 필요해지는 경로는 이쪽이다.)**
 
+**(6단계 후속: 위 예고는 틀렸다 — 코드로 반영해보니 "품목취소 확정 → 줄어든 required count로
+재봉인"이라는 경로 자체가 생기지 않는다.** 이유는 파이프라인 순서에 있다: Stage1 판정
+(`_ITEM_RECOVERABLE` 기반 품목취소/부분수령/계속대기)은 전부 `picking_delay_gate`의 self-loop
+**안에서** 일어나고, 이 self-loop는 모든 item의 지연이 해소되거나 Stage1 판정까지 끝나야만
+`package_assembly_agent`로 넘어간다(`route_after_picking_gate`). 즉 `package_assembly_agent`가
+처음(이자 유일하게) 실행되는 시점엔 취소/부분수령 여부가 **이미 다 확정돼 있다** —
+`required_item_count`를 "이미 만들어진 패키지에서 나중에 줄이는" 상황 자체가 없고,
+`_is_assembly_eligible`로 애초에 그룹핑 대상에서 뺀 채로 단 한 번에 정확한 count가 계산된다.
+11개 시나리오 재실행(`main.py`)으로도 "합류" 로그는 여전히 0건 — v16 이후에도 dead code로
+남아 있음을 실측으로 재확인했다.
+
+그렇다고 "합류"가 영원히 재활성화 불가능하다고 확정할 근거는 아니다 — 진짜로 남는 재활성화
+경로는 하나 더 있다: **경로B(진짜 사람이 개입하는 별도 진입점, "판단 vs 개입" 절 참고)가 실제로
+구현되는 경우**다. `pending_decision`이 이 POC처럼 같은 tick에서 즉시 자동 해소되지 않고 정말로
+tick을 넘어 열린 채로 남으려면, `app = build_graph()`가 지금처럼 checkpointer 없이 compile되는
+구조부터 바뀌어야 한다(위 "발견된 gap" 1~3번 조건 자체가 깨져야 함) — 그렇게 되면 어떤 주문이
+여러 번의 `invoke()`에 걸쳐 나뉘어 처리될 수 있고, 그때는 `package_assembly_agent`가 정말로
+재호출되며 일부 item이 이미 패키지에 배정된 채 대기 중인 상황이 실제로 생길 수 있다 — "합류"가
+그 경로에서는 다시 이름 그대로 쓰일 가능성이 있다. 다만 이건 6단계가 예고했던 것보다 훨씬 더
+먼 얘기(체크포인터 도입 등 실행 모델 자체의 변경)라, "결국 재활성화되지 않고 dead code로
+확정됨"이라고 못박기보다는 "v16으로는 재활성화되지 않았고, 남은 유일한 경로는 경로B 구현"으로
+정정해둔다.)**
+
 ### Package 봉인 메커니즘
 
 Package 봉인(`tracking_number` 발급)은 피킹지연게이트가 원인을 제거하면, 그 결과
@@ -450,11 +473,12 @@ item의 지연을 이미 완전히 해소/에스컬레이션한 **뒤에야** `p
 넘어가므로, 이 노드는 자신이 실행되는 단 한 번 안에서 이미 최종 확정된 상태를 보고 봉인
 여부를 판단한다. 즉 지금은 "재호출로 새 해소를 반영"하는 게 아니라 "피킹지연게이트가
 전부 끝난 뒤에 package_assembly_agent가 정확히 한 번 실행"되는 구조라 우연히 문제가
-안 드러난다.
+안 드러난다. (6단계 후속: v16의 Stage1 판정도 정확히 같은 이유로 재호출이 필요 없다 — 위
+"발견된 gap" 절의 6단계 후속 참고. 이 절이 원래 예상했던 이유대로 정리됐다.)
 
 ## State 스키마 변경 이력
 
-DESIGN.md의 State 스키마는 현재(v15) 상태만 담는다. 각 버전이 왜 바뀌었는지는 여기 남긴다.
+DESIGN.md의 State 스키마는 현재(v16) 상태만 담는다. 각 버전이 왜 바뀌었는지는 여기 남긴다.
 
 > v10 → v11 변경: 배송지 정규화. `Address.address_id` 신설, `UserProfile.delivery_address`/`Order.delivery_address`(단수) → `delivery_addresses`(list),
 > `Item.delivery_address_id`(참조) 추가, `Package.delivery_address_id` 추가. 원칙 5(한 주문이 여러 배송지로 쪼개짐)를 스키마로 실제 지원하기 위함.
@@ -486,6 +510,14 @@ DESIGN.md의 State 스키마는 현재(v15) 상태만 담는다. 각 버전이 �
 > (판단=escalated bool, 기록=escalation_reasoning이라는 원칙3 그대로). `GraphState.order_created_at_hint: str`
 > — "주문 생성 이후 경과 시간"을 predict_delay_escalation의 입력 신호로 쓰려면 데모에서 과거 시각을
 > 강제할 방법이 필요해서 추가(`payment_status_hint`류와 같은 진입 입력 패턴).
+>
+> v15 → v16 변경 (6단계, 사람 개입 워크플로우 코드 반영): **`escalated` bool 2곳 모두 제거.**
+> `Item.escalated` → `pending_decision`/`decision_log`(판단/기록 분리, 원칙3). `PackageState.escalated`
+> → `compensation`(보상조치 실행 기록 — 조립대기게이트/배송중게이트 공유 필드라 둘 다 통합).
+> `OrderState.split_delivery_preference` 제거 → `fulfillment_preference_on_delay` 신설(사전
+> 확정 지시 → 문제 발생 시점 참조 선호도로 재설계). `InternalOrderStatus`에 "부분완료",
+> `ItemStatus`에 "취소됨", `CustomerFacingStatus`에 "상품준비불가", `ItemDelayReason`에
+> "통관지연"(새 데모 트리거용) 추가. 확정 근거는 아래 "6단계" 절 참고.
 
 ## 5단계(코드 리뷰): 사람 개입 워크플로우 재설계 — 논의 과정
 
