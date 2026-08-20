@@ -132,15 +132,17 @@ def run_demo() -> None:
 
     print()
     print("=" * 60)
-    print("시나리오 6: 재시도 초과 에스컬레이션 (피킹지연게이트→조립대기게이트 연쇄)")
+    print("시나리오 6: Stage1 회복불가 판정 → 품목취소 (피킹지연게이트)")
     print("=" * 60)
-    result_escalate_chain = app.invoke(
+    result_item_cancel = app.invoke(
         {
             "user_id": "user-001",
             "confirmed_order_items": [
                 {
-                    # 파손 → 재시도로 영구 미해소 → 피킹지연게이트 3회 재시도 후 item escalated=true
-                    # → 패키지도 영원히 미봉인 → 조립대기게이트도 3회 재시도 후 package escalated=true
+                    # 파손 → 회복불가 분류(재시도로도 영구 미해소) → 3회 재시도 소진 후 Stage1이
+                    # 즉시 자동으로 품목취소 확정 (item_status="취소됨"). 이 주소엔 이 item뿐이라
+                    # 패키지 자체가 만들어지지 않고, 남은 배송 대상이 없어 internal_order_status는
+                    # "부분완료"(전부취소의 vacuous case)로 종결된다
                     "item_id": "SKU-103",
                     "delivery_address_id": "ADDR-HOME",
                     "item_delay_reason": "파손",
@@ -149,11 +151,11 @@ def run_demo() -> None:
             "payment_status_hint": "완료",
         }
     )
-    _print_result(result_escalate_chain)
+    _print_result(result_item_cancel)
 
     print()
     print("=" * 60)
-    print("시나리오 7: 즉시 에스컬레이션 (배송중게이트: 자연재해는 재시도 없이 바로 escalated=true)")
+    print("시나리오 7: 즉시 보상조치 (배송중게이트: 자연재해는 재시도 없이 바로 환불)")
     print("=" * 60)
     result_disaster = app.invoke(
         {
@@ -202,36 +204,63 @@ def run_demo() -> None:
 
     print()
     print("=" * 60)
-    print("시나리오 9: split_delivery_preference=true → 같은 배송지도 item별 별도 Package")
+    print("시나리오 9: Stage1 회복가능 판정 + 부분수령희망 → 지연 item 제외하고 형제 item만 배송")
     print("=" * 60)
-    result_split_pref = app.invoke(
+    result_partial_fulfillment = app.invoke(
         {
             "user_id": "user-001",
             "confirmed_order_items": [
                 {
-                    "item_id": "SKU-301",
+                    # 통관지연 → 회복가능이지만 resolve_at=None이라 재시도로는 절대 안 풀림 →
+                    # 3회 재시도 소진 후 Stage1이 fulfillment_preference_on_delay="부분수령희망"을
+                    # 참조해 자동 적용 → 이 item은 패키지조립agent 그룹핑에서 영구 제외된다
+                    "item_id": "SKU-601",
+                    "delivery_address_id": "ADDR-HOME",
+                    "item_delay_reason": "통관지연",
+                },
+                {
+                    # 같은 배송지의 정상 item — 지연 item과 묶이지 않고 단독으로 봉인/배송돼야 함
+                    "item_id": "SKU-602",
                     "delivery_address_id": "ADDR-HOME",
                     "location": {"zone": "A", "shelf": "01", "bin": "01"},
                 },
-                {
-                    # split_delivery_preference=true라 SKU-301과 배송지가 같아도 별도 Package로 분리돼야 함
-                    "item_id": "SKU-302",
-                    "delivery_address_id": "ADDR-HOME",
-                    "location": {"zone": "A", "shelf": "01", "bin": "02"},
-                },
             ],
             "payment_status_hint": "완료",
-            "split_delivery_preference_hint": True,
+            "fulfillment_preference_on_delay_hint": "부분수령희망",
         }
     )
-    _print_result(result_split_pref)
+    _print_result(result_partial_fulfillment)
 
     print()
     print("=" * 60)
-    print("시나리오 10: Supervisor 조기 에스컬레이션 대조 — retry_count=0인데도 미리 올릴 수 있는가")
+    print("시나리오 10: Stage1 회복가능 판정 + 계속대기희망 → 패키지가 끝내 미봉인 → 보상조치(환불)")
+    print("=" * 60)
+    result_continue_waiting = app.invoke(
+        {
+            "user_id": "user-001",
+            "confirmed_order_items": [
+                {
+                    # 통관지연 + 계속대기희망 → Stage1이 그룹핑에서 제외하지 않고 계속 대기시킴 →
+                    # 이 배송지엔 이 item뿐이라 패키지가 영원히 미봉인 → 조립대기게이트 자체 재시도
+                    # 예산(MAX_GATE_RETRIES)도 소진 → 보상조치(환불)로 귀결
+                    "item_id": "SKU-701",
+                    "delivery_address_id": "ADDR-OFFICE",
+                    "item_delay_reason": "통관지연",
+                },
+            ],
+            "payment_status_hint": "완료",
+            "fulfillment_preference_on_delay_hint": "계속대기희망",
+        }
+    )
+    _print_result(result_continue_waiting)
+
+    print()
+    print("=" * 60)
+    print("시나리오 11: Supervisor 조기 판정 대조 - retry_count=0인데도 회복불가로 볼 수 있는가")
     print("=" * 60)
     print("(Google Gemini 실제 호출. GOOGLE_API_KEY 미설정 시 predict_delay_escalation이 폴백해서")
-    print(" escalate_now=False로 처리되고, 이 경우 아래는 시나리오5와 동일하게 정상 해소로 끝남)")
+    print(" escalate_now=False로 처리되고, 이 경우 아래는 시나리오5와 동일하게 정상 해소로 끝남.")
+    print(" escalate_now=True가 나오면 회복불가로 재해석돼 즉시 보상조치(환불)로 귀결된다)")
     old_order_created_at = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
     result_supervisor_predict = app.invoke(
         {
@@ -253,35 +282,6 @@ def run_demo() -> None:
     )
     _print_result(result_supervisor_predict)
 
-    print()
-    print("=" * 60)
-    print("시나리오 11: 같은 배송지, 다른 패키지가 서로 다른 지연 신호 (item_id 키잉 검증)")
-    print("=" * 60)
-    result_diverge = app.invoke(
-        {
-            "user_id": "user-001",
-            "confirmed_order_items": [
-                {
-                    # split_delivery_preference=true라 SKU-501/502가 같은 배송지(ADDR-HOME)여도
-                    # 별도 Package로 분리됨. _PACKAGE_DELAY_SIGNAL이 delivery_address_id가 아니라
-                    # item_id로 키잉되므로(delay_gates.py) 두 패키지가 서로 다른 지연을 받아야
-                    # 정상 — SKU-501은 교통지연(재시도로 해소), SKU-502는 자연재해(즉시 에스컬레이션)
-                    "item_id": "SKU-501",
-                    "delivery_address_id": "ADDR-HOME",
-                    "location": {"zone": "A", "shelf": "01", "bin": "01"},
-                },
-                {
-                    "item_id": "SKU-502",
-                    "delivery_address_id": "ADDR-HOME",
-                    "location": {"zone": "A", "shelf": "01", "bin": "02"},
-                },
-            ],
-            "payment_status_hint": "완료",
-            "split_delivery_preference_hint": True,
-        }
-    )
-    _print_result(result_diverge)
-
 
 def _print_result(state: dict) -> None:
     order = state.get("order", {})
@@ -293,7 +293,7 @@ def _print_result(state: dict) -> None:
             "order_id": order.get("order_id"),
             "internal_order_status": order.get("internal_order_status"),
             "payment_status": order.get("payment_status"),
-            "split_delivery_preference": order.get("split_delivery_preference"),
+            "fulfillment_preference_on_delay": order.get("fulfillment_preference_on_delay"),
             "delivery_addresses": [
                 {"address_id": addr["address_id"], "address_line": addr["address_line"]}
                 for addr in order.get("delivery_addresses", [])
@@ -311,7 +311,7 @@ def _print_result(state: dict) -> None:
                 "join_waiting_since": pkg["join_waiting_since"],
                 "delay_categories": pkg["delay_categories"],
                 "retry_count": pkg["retry_count"],
-                "escalated": pkg["escalated"],
+                "compensation": pkg["compensation"],
                 "escalation_reasoning": pkg["escalation_reasoning"],
                 "policy_version_applied": pkg["policy_version_applied"],
             }

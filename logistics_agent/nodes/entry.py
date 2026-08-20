@@ -94,7 +94,8 @@ def order_request_agent(state: GraphState) -> GraphState:
                 "policy_version_applied": None,
                 "last_checked_at": None,
                 "retry_count": 0,
-                "escalated": False,
+                "pending_decision": None,
+                "decision_log": [],
             }
         )
 
@@ -105,7 +106,7 @@ def order_request_agent(state: GraphState) -> GraphState:
         "order_created_at": order_created_at,
         "delivery_addresses": delivery_addresses,
         "payment_status": payment_status,
-        "split_delivery_preference": state.get("split_delivery_preference_hint", False),
+        "fulfillment_preference_on_delay": state.get("fulfillment_preference_on_delay_hint"),
         "cancel_requested_at": None,
         "cancel_status": None,
         "internal_order_status": "접수",

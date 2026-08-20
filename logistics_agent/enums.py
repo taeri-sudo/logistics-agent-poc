@@ -10,6 +10,7 @@ InternalOrderStatus = Literal[
     "출고준비",
     "배송중",
     "완료",
+    "부분완료",
 ]
 ItemStatus = Literal[
     "대기",
@@ -20,12 +21,15 @@ ItemStatus = Literal[
     "배송중",
     "배송지연",
     "배송완료",
+    "취소됨",
 ]
-ItemDelayReason = Literal["재고부족", "검수불량", "파손"]
+ItemDelayReason = Literal["재고부족", "검수불량", "파손", "통관지연"]
+FulfillmentPreference = Literal["부분수령희망", "계속대기희망"]
 CustomerFacingStatus = Literal[
     "주문접수",
     "준비중",
     "배송중",
     "배송완료",
     "지연",
+    "상품준비불가",
 ]

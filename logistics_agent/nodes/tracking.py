@@ -33,8 +33,8 @@ def mock_carrier_signal(state: GraphState) -> GraphState:
 
     지금은 그 이벤트를 흉내 내어, 봉인된 Package를 패키지 단위로 `포장완료→출고됨→배송중→배송완료`
     고정 시퀀스에서 한 틱씩 전진시키고 GPS placeholder를 채운다. 같은 패키지의 모든 item에 동일하게
-    반영한다(원칙1: 캐리어 신호는 Package 사건). escalated된 패키지도 계속 전진시킨다
-    (PackageState.escalated의 "비차단" 원칙).
+    반영한다(원칙1: 캐리어 신호는 Package 사건). 보상조치(환불)된 패키지도 계속 전진시킨다
+    ("비차단" 원칙 — 백그라운드 자동처리는 사람/판단 결과와 무관하게 계속됨).
     """
     order = state["order"]
     item_list: list[Item] = list(order["item_list"])
@@ -73,14 +73,40 @@ def mock_carrier_signal(state: GraphState) -> GraphState:
     return {"order": order, "packages": packages}
 
 
+_PERMANENTLY_EXCLUDED_OUTCOMES = {"회복가능_부분수령적용"}
+
+
+def _permanently_excluded(item: Item) -> bool:
+    """이 item은 앞으로도 package_ref를 받지 못한다 — 취소됐거나(품목취소), 그래프
+    재진입성이 없는 이 POC에서 영구 제외된(부분수령적용) 경우. assembly.py의
+    `_is_assembly_eligible`과 같은 기준(순환 import를 피하려 여기서 다시 정의)."""
+    if item["item_status"] == "취소됨":
+        return True
+    return bool(item["decision_log"]) and item["decision_log"][-1]["outcome"] in _PERMANENTLY_EXCLUDED_OUTCOMES
+
+
 def derive_internal_order_status(item_list: list[Item], packages: list[PackageState]) -> InternalOrderStatus:
-    """Order.internal_order_status 파생 규칙. 소유자는 추적agent — 다른 노드는 이 함수를 import해 쓴다."""
+    """Order.internal_order_status 파생 규칙. 소유자는 추적agent — 다른 노드는 이 함수를 import해 쓴다.
+
+    v16: 품목 단위 취소, 그리고 그래프 재진입성이 없어 영구 제외되는 부분수령 item 때문에
+    "일부만 배송"이 실제로 가능해졌다. 진행 중(조립중/출고준비/배송중)에는 이 사실을 별도로
+    반영하지 않는다 — item.customer_facing_status가 이미 그 사실을 드러내고, 진행 단계
+    자체는 원칙2(순차단계는 enum)상 이 축과 무관하기 때문이다. 영구 제외된 item이 있는 채로
+    종결(잔여 item이 전부 배송완료, 또는 전부 제외돼 남은 게 없는 경우 포함)될 때만 "완료"
+    대신 "부분완료"로 구분한다.
+    """
+    shippable = [item for item in item_list if not _permanently_excluded(item)]
+    excluded = len(shippable) < len(item_list)
+
+    if not shippable:
+        return "부분완료"  # 전부 취소/제외 — 남은 배송 대상 없음 (vacuous case)
+
     if not packages or any(pkg["tracking_number"] is None for pkg in packages):
         return "조립중"
 
-    ship_statuses = {item["item_status"] for item in item_list if item["package_ref"] is not None}
+    ship_statuses = {item["item_status"] for item in shippable if item["package_ref"] is not None}
     if ship_statuses and ship_statuses <= {"배송완료"}:
-        return "완료"
+        return "부분완료" if excluded else "완료"
     if ship_statuses & {"출고됨", "배송중", "배송완료"}:
         return "배송중"
     return "출고준비"

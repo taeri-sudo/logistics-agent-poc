@@ -14,6 +14,19 @@ ARRIVED_ITEM_STATUSES = frozenset(
     {"피킹완료", "포장완료", "출고됨", "배송중", "배송지연", "배송완료"}
 )
 
+# v16: Stage1(피킹지연게이트) 판정 결과 중 이 그룹핑에서 영구 제외돼야 하는 outcome.
+# 취소된 item은 배송 대상 자체가 아니고, 부분수령 적용 item은 그래프 재진입성이 없는 이 POC에서
+# 다시 조립되지 않는다(DESIGN.md "그래프 재진입성" 한계를 그대로 인정 — 다음 세션 과제).
+_GROUPING_EXCLUDED_OUTCOMES = {"회복불가_품목취소", "회복가능_부분수령적용"}
+
+
+def _is_assembly_eligible(item: Item) -> bool:
+    if item["item_status"] == "취소됨":
+        return False
+    if item["decision_log"] and item["decision_log"][-1]["outcome"] in _GROUPING_EXCLUDED_OUTCOMES:
+        return False
+    return True
+
 
 def _new_package(address_id: str, now: str) -> PackageState:
     return {
@@ -28,7 +41,7 @@ def _new_package(address_id: str, now: str) -> PackageState:
         "policy_version_applied": None,
         "last_checked_at": now,
         "retry_count": 0,
-        "escalated": False,
+        "compensation": None,
         "escalation_reasoning": None,
         "join_waiting_since": None,
         "notification_log": [],
@@ -56,39 +69,29 @@ def package_assembly_agent(state: GraphState) -> GraphState:
     packages: list[PackageState] = list(state.get("packages", []))
     now = _now()
 
-    # 아직 package_ref가 없는 item만 수집 (이미 배정된 건 스킵 — 재진입 멱등성)
-    unassigned = [(idx, item) for idx, item in enumerate(item_list) if item["package_ref"] is None]
+    # 아직 package_ref가 없고, Stage1 판정으로 영구 제외되지 않은 item만 수집 (재진입 멱등성)
+    unassigned = [
+        (idx, item)
+        for idx, item in enumerate(item_list)
+        if item["package_ref"] is None and _is_assembly_eligible(item)
+    ]
 
-    # split_delivery_preference=true면 같은 배송지라도 item마다 별도 Package로 분리
-    split_pref = order["split_delivery_preference"]
+    print(f"[패키지조립agent] 시작 미배정={len(unassigned)}, 기존패키지={len(packages)}")
 
-    print(
-        f"[패키지조립agent] 시작 미배정={len(unassigned)}, 기존패키지={len(packages)}, "
-        f"split_delivery_preference={split_pref}"
-    )
-
-    # 배송지(+분리배송이면 item_id도)별 그룹핑 (dict 삽입순서 = 최초 등장 순서)
-    groups: dict[tuple[str, str], list[int]] = {}
+    # 배송지별 그룹핑 (dict 삽입순서 = 최초 등장 순서)
+    groups: dict[str, list[int]] = {}
     for idx, item in unassigned:
-        address_id = item["delivery_address_id"]
-        group_key = (address_id, item["item_id"] if split_pref else "")
-        groups.setdefault(group_key, []).append(idx)
+        groups.setdefault(item["delivery_address_id"], []).append(idx)
 
-    for group_key, indexes in groups.items():
-        address_id = group_key[0]
+    for address_id, indexes in groups.items():
         # 같은 배송지의 미봉인 패키지가 있으면 합류, 없으면 신규 생성.
-        # 분리배송이면 항상 신규 — 다른 item의 미봉인 패키지에 합류하면 안 됨.
-        pos = (
-            None
-            if split_pref
-            else next(
-                (
-                    i
-                    for i, pkg in enumerate(packages)
-                    if pkg["tracking_number"] is None and pkg["delivery_address_id"] == address_id
-                ),
-                None,
-            )
+        pos = next(
+            (
+                i
+                for i, pkg in enumerate(packages)
+                if pkg["tracking_number"] is None and pkg["delivery_address_id"] == address_id
+            ),
+            None,
         )
         if pos is None:
             packages.append(_new_package(address_id, now))
