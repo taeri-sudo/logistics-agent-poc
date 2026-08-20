@@ -11,6 +11,7 @@ InternalOrderStatus = Literal[
     "배송중",
     "완료",
     "부분완료",
+    "전체무산",
 ]
 ItemStatus = Literal[
     "대기",

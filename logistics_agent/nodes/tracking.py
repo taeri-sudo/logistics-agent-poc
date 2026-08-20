@@ -76,13 +76,17 @@ def mock_carrier_signal(state: GraphState) -> GraphState:
 _PERMANENTLY_EXCLUDED_OUTCOMES = {"회복가능_부분수령적용"}
 
 
-def _permanently_excluded(item: Item) -> bool:
-    """이 item은 앞으로도 package_ref를 받지 못한다 — 취소됐거나(품목취소), 그래프
-    재진입성이 없는 이 POC에서 영구 제외된(부분수령적용) 경우. assembly.py의
+def _permanently_excluded(item: Item, packages: list[PackageState]) -> bool:
+    """이 item은 앞으로도 배송완료에 도달하지 못한다 — 취소됐거나(품목취소), 그래프
+    재진입성이 없는 이 POC에서 영구 제외된(부분수령적용) 경우, 또는 소속 패키지가 끝내
+    미봉인 상태로 보상조치(환불)돼 앞으로도 절대 봉인되지 않을 경우(v16 후속). assembly.py의
     `_is_assembly_eligible`과 같은 기준(순환 import를 피하려 여기서 다시 정의)."""
     if item["item_status"] == "취소됨":
         return True
-    return bool(item["decision_log"]) and item["decision_log"][-1]["outcome"] in _PERMANENTLY_EXCLUDED_OUTCOMES
+    if item["decision_log"] and item["decision_log"][-1]["outcome"] in _PERMANENTLY_EXCLUDED_OUTCOMES:
+        return True
+    pkg = next((p for p in packages if p["package_id"] == item["package_ref"]), None)
+    return pkg is not None and pkg["tracking_number"] is None and pkg["compensation"] is not None
 
 
 def derive_internal_order_status(item_list: list[Item], packages: list[PackageState]) -> InternalOrderStatus:
@@ -92,16 +96,24 @@ def derive_internal_order_status(item_list: list[Item], packages: list[PackageSt
     "일부만 배송"이 실제로 가능해졌다. 진행 중(조립중/출고준비/배송중)에는 이 사실을 별도로
     반영하지 않는다 — item.customer_facing_status가 이미 그 사실을 드러내고, 진행 단계
     자체는 원칙2(순차단계는 enum)상 이 축과 무관하기 때문이다. 영구 제외된 item이 있는 채로
-    종결(잔여 item이 전부 배송완료, 또는 전부 제외돼 남은 게 없는 경우 포함)될 때만 "완료"
-    대신 "부분완료"로 구분한다.
+    종결(잔여 item이 전부 배송완료)될 때만 "완료" 대신 "부분완료"로 구분한다.
+
+    v16 후속: shippable item이 아예 0개인 vacuous case(전부 취소/제외/미봉인채 보상조치)는
+    "부분완료"와 분리해 "전체무산"으로 반환한다 — "부분"은 대비되는 "온 것"이 있다는 전제인데
+    이 케이스는 그 전제 자체가 성립하지 않는다(하나도 배송되지 않음). 코드 리뷰로 발견(main.py
+    시나리오 6/10이 실제로 이 케이스를 실행하면서도 "부분완료"라 찍혀 혼동을 유발했음).
     """
-    shippable = [item for item in item_list if not _permanently_excluded(item)]
+    shippable = [item for item in item_list if not _permanently_excluded(item, packages)]
     excluded = len(shippable) < len(item_list)
 
     if not shippable:
-        return "부분완료"  # 전부 취소/제외 — 남은 배송 대상 없음 (vacuous case)
+        return "전체무산"  # 전부 취소/제외/미봉인채 보상조치 — 배송된 item이 하나도 없음 (vacuous case)
 
-    if not packages or any(pkg["tracking_number"] is None for pkg in packages):
+    # 미봉인+미보상조치 패키지가 남아있을 때만 "조립중" — 보상조치된 미봉인 패키지는 이미
+    # shippable 필터에서 걸러졌으므로(위) 더 이상 이 판정을 막지 않는다 (v16 후속 수정).
+    if not packages or any(
+        pkg["tracking_number"] is None and pkg["compensation"] is None for pkg in packages
+    ):
         return "조립중"
 
     ship_statuses = {item["item_status"] for item in shippable if item["package_ref"] is not None}

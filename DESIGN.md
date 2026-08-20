@@ -21,6 +21,7 @@
   - [GpsPoint](#schema-gpspoint)
   - [UserProfile](#schema-userprofile)
   - [PaymentMethod](#schema-paymentmethod)
+- [검토 후 현재 구조 유지로 확정](#settled-decisions)
 - [아직 결정 안 된 것 / 다음에 확인할 것](#open-questions)
 - [미구현/죽은 필드 종합](#dead-fields)
 - [확장 지점](#extension-points)
@@ -55,6 +56,16 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
 - [x] 6단계: 사람 개입 워크플로우 v16 코드 반영 (Item Stage1 자동판정 + Package 보상조치(환불)
   모델). `split_delivery_preference` 제거(시나리오 9/11 폐기 포함). 그래프 재진입성(부분수령
   item의 재조립)은 여전히 미구현 — 아래 "사람 개입 워크플로우" 절과 "아직 결정 안 된 것" 참고
+- [x] 6단계 후속(코드 리뷰): `tracking.py`의 파생값 계산이 `PackageState.compensation`(v16
+  신설)을 전혀 읽지 않던 gap 수정 — 미봉인 상태로 보상조치된 패키지가 있으면
+  `internal_order_status`가 그래프 종료 후에도 영원히 "조립중"에 멈추는 버그였음(시나리오 10으로
+  실측 확인). `_permanently_excluded`가 이 케이스도 영구 제외로 처리하도록 수정. 봉인 후
+  보상조치된 item이 `customer_facing_status`에 환불 사실을 전혀 드러내지 못하는 문제(시나리오 7)는
+  별도 미정 항목으로 남김 — 아래 "아직 결정 안 된 것" 참고
+- [x] 6단계 후속: `internal_order_status`에 **"전체무산"** 신설 — vacuous case(shippable item
+  0개, 시나리오 6/10)가 진짜 부분완료(시나리오 9, 일부 배송+일부 영구제외)와 같은 "부분완료"
+  라벨을 쓰던 걸 분리. "부분"은 대비되는 "온 것"이 있다는 전제인데 vacuous case는 그 전제가
+  성립하지 않아 혼동을 유발했음
 
 상세 실행 기록·시나리오 검증·gap 발견 과정은 전부 [JOURNAL.md](JOURNAL.md) 참고.
 
@@ -230,7 +241,7 @@ Package 보상조치)/`assembly.py`(그룹핑 제외)/`tracking.py`(파생값)/`
 |---|---|
 | ~~split_delivery_preference: bool~~ | 제거. "사전에 무조건 분리"라는 개념 자체가 잘못 설계였다는 판단 — assembly.py 그룹핑 로직도 함께 제거, 이를 검증하던 시나리오 9/11도 폐기(JOURNAL.md 6단계 참고) |
 | `fulfillment_preference_on_delay: "부분수령희망"\|"계속대기희망"\|None` | 신설. 기본값 None은 "계속대기희망"과 동일하게 취급 |
-| `internal_order_status` | 값 추가 — **"부분완료"**. 취소/영구제외된 item이 있는 채로 잔여 item이 전부 배송완료(또는 전부 제외돼 남은 게 없는 vacuous case)될 때만 이 값. 진행 중(조립중~배송중)에는 취소 여부를 반영하지 않음(원칙2 — 순차단계와 별개 축) |
+| `internal_order_status` | 값 추가 — **"부분완료"**(취소/영구제외된 item이 있는 채로 잔여 item이 전부 배송완료). 진행 중(조립중~배송중)에는 취소 여부를 반영하지 않음(원칙2 — 순차단계와 별개 축). vacuous case(전부 취소/제외돼 배송된 item이 하나도 없음)는 v16 후속에서 **"전체무산"**으로 분리(아래 참고) — "부분"이 성립하려면 대비되는 "온 것"이 있어야 하는데 vacuous case는 그 전제가 없어 별도 값이 맞다는 판단 |
 | `cancel_status`/`cancel_requested_at` | 변경 없음 — 주문 전체 취소 흐름 전용으로 유지, 품목 단위 취소는 별도 경로(`decision_log`) |
 
 *Item*
@@ -358,7 +369,7 @@ class CompensationRecord(TypedDict):
 | fulfillment_preference_on_delay | string(enum)/null | 부분수령희망/계속대기희망/null(=계속대기희망과 동일 취급). 주문 시점 사전등록, 문제가 실제 발생했을 때만 참조됨(v16, 舊 split_delivery_preference) |
 | cancel_requested_at | timestamp/null | |
 | cancel_status | string(enum)/null | 요청됨/처리중/완료/거부됨 |
-| internal_order_status | string(enum) | 파생값. 최종 소유자는 추적agent — `derive_internal_order_status()` (tracking.py), 패키지조립agent도 같은 함수를 import해서 씀. 값: 접수/검증실패/창고처리중/조립중/출고준비/배송중/완료/부분완료 |
+| internal_order_status | string(enum) | 파생값. 최종 소유자는 추적agent — `derive_internal_order_status()` (tracking.py), 패키지조립agent도 같은 함수를 import해서 씀. 값: 접수/검증실패/창고처리중/조립중/출고준비/배송중/완료/부분완료/전체무산 |
 | item_list | list[Item] | 아래 Item 참고 |
 | current_item_index | int | 창고처리agent 순회 위치 |
 | notification_enabled | bool | 현재 설정값 (UserProfile에서 복사) |
@@ -442,6 +453,26 @@ class CompensationRecord(TypedDict):
 
 ---
 
+<a id="settled-decisions"></a>
+## 검토 후 현재 구조 유지로 확정 (재검토 불필요)
+> "아직 결정 안 된 것"과 달리 이미 검토를 마치고 결론이 난 항목. 다시 열어보지 않는다 —
+> 단, 각 항목에 적힌 재검토 조건이 실제로 충족되면 예외.
+
+- **"전체무산" 원인 세분화(`_exclusion_reason` 같은 필드 신설) — 검토 후 기각, 현재처럼
+  단일 값 + item_list/packages 드릴다운 구조 유지.**
+  1. 현재 `internal_order_status`의 소비처는 `main.py`의 디버그 프린트뿐 — 원인별로 다른
+     화면/버튼을 보여줘야 하는 실사용 요구가 없다.
+  2. "전체무산"으로 귀결되는 원인 중 하나(부분수령 영구제외)는 애초에 "무산 원인"으로 묶일
+     성격이 아니라 별도 결함(그래프 재진입성 미구현)이다 — 세분화 필드로 정리할 대상이 아니라
+     그 결함 자체를 먼저 풀어야 할 사안.
+  3. 한 주문 안에서도 item마다 원인이 다를 수 있어(예: item A는 품목취소, item B는 조립무산)
+     "주문 하나당 원인 하나"라는 전제 자체가 성립하지 않는다 — 스칼라 필드로 표현 불가능한
+     구조적 제약이라 재검토로 해소될 문제가 아니다.
+  **재검토 조건**: 실제 CS 진입점이 생겨서 "전체무산인데 이유별로 다른 안내가 필요하다"는
+  요구가 실제로 나올 때.
+
+---
+
 <a id="open-questions"></a>
 ## 아직 결정 안 된 것 / 다음에 확인할 것
 - `order_item_id`(item_id와 분리된 유닛 식별자) 신설 여부 — 지금은 `order_validation_agent`의
@@ -483,10 +514,14 @@ class CompensationRecord(TypedDict):
   제외된 item은 이 POC에서 다시 조립되지 않는다 — `package_assembly_agent`가 self-loop
   edge 없이 주문당 1회만 실행되는 그래프 구조라서다. 실제 서비스라면 이 item이 나중에 해소될 때
   패키지조립agent를 다시 태울 진입점(또는 별도 배치)이 필요하다.
-- **`derive_internal_order_status`의 "전부 취소/제외" vacuous case가 "부분완료"인 게 최선인지.**
-  item이 전부 취소되거나 부분수령으로 영구 제외돼 남은 배송 대상이 없는 경우도 지금은
-  "부분완료"로 반환한다 — 실질적으론 "완료"라기보다 "전체 무산"에 가까워 이름이 다소 억지스럽다.
-  별도 값("전체취소"급)이 필요한지는 이런 케이스가 실제로 문제가 되는 시점에 재검토.
+- **봉인 후 보상조치(환불)된 item의 `customer_facing_status`가 환불 사실을 전혀 드러내지 않는다.**
+  `mock_carrier_signal`은 보상조치된 패키지도 계속 전진시킨다는 "비차단" 원칙에 따라 물리적으로는
+  배송 시퀀스를 그대로 밟고, `tracking_agent`도 그 결과를 그대로 반영해 최종적으로 "배송완료"로
+  표시한다(시나리오 7로 확인) — 고객은 환불받았다는 사실을 어디서도 알 수 없다.
+  `CustomerFacingStatus`에도 환불 관련 값이 없다. 두 방향이 후보: (1) 기존 "상품준비불가"를
+  Package 도메인 보상조치에도 재사용(Item 도메인 취소와 같은 라벨로 통일) — 단 이 값은 원래
+  "이 상품 자체를 준비할 수 없다"는 Item 도메인 어휘라 의미가 다소 늘어남, (2) "환불됨" 같은 새
+  값을 신설해 취소와 명확히 구분. 실제로 문제가 되는 시점(알림agent 구현 등)에 재검토.
 
 <a id="dead-fields"></a>
 ## 미구현/죽은 필드 종합

@@ -142,7 +142,7 @@ def run_demo() -> None:
                     # 파손 → 회복불가 분류(재시도로도 영구 미해소) → 3회 재시도 소진 후 Stage1이
                     # 즉시 자동으로 품목취소 확정 (item_status="취소됨"). 이 주소엔 이 item뿐이라
                     # 패키지 자체가 만들어지지 않고, 남은 배송 대상이 없어 internal_order_status는
-                    # "부분완료"(전부취소의 vacuous case)로 종결된다
+                    # "전체무산"(전부취소의 vacuous case)으로 종결된다
                     "item_id": "SKU-103",
                     "delivery_address_id": "ADDR-HOME",
                     "item_delay_reason": "파손",
