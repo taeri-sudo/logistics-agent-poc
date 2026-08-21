@@ -1,5 +1,10 @@
 """LangGraph 최소 골격 — UserProfile → 주문요청 → 검증 → decide_warehouse_entry → 창고처리
-→ 피킹지연게이트 → 패키지조립 → 포장 → 포장대기게이트 → 배송중게이트 → mock_carrier_signal → 추적."""
+→ 피킹지연게이트 → 패키지조립 → 포장 → 포장대기게이트 → (배송중게이트 → mock_carrier_signal → 추적)*.
+
+마지막 세 노드는 하나의 통합 self-loop다 — 배송중게이트가 이번 틱의 지연을 처리하고,
+mock_carrier_signal이 미해소 지연이 없는 패키지만 전진시키고, 추적agent가 파생값을
+재계산해 계속할지 정한다(route_after_in_transit_cycle). 지연 패키지 하나가 같은 주문의
+무지연 패키지까지 order-wide로 막던 gap을 고치며 세 노드를 이렇게 합쳤다(DESIGN.md 참고)."""
 
 from __future__ import annotations
 
@@ -10,14 +15,13 @@ from logistics_agent.nodes.delay_gates import (
     in_transit_delay_gate,
     packaging_wait_gate,
     picking_delay_gate,
-    route_after_in_transit_gate,
     route_after_packaging_wait_gate,
     route_after_picking_gate,
 )
 from logistics_agent.nodes.entry import order_request_agent, user_profile_lookup
 from logistics_agent.nodes.packaging import packaging_agent
 from logistics_agent.nodes.supervisor import decide_warehouse_entry
-from logistics_agent.nodes.tracking import mock_carrier_signal, route_after_tracking, tracking_agent
+from logistics_agent.nodes.tracking import mock_carrier_signal, route_after_in_transit_cycle, tracking_agent
 from logistics_agent.nodes.validation import order_validation_agent, route_after_validation
 from logistics_agent.nodes.warehouse import warehouse_processing_agent
 from logistics_agent.state import GraphState
@@ -61,16 +65,12 @@ def build_graph():
         route_after_packaging_wait_gate,
         {"retry": "packaging_wait_gate", "proceed": "in_transit_delay_gate"},
     )
-    graph.add_conditional_edges(
-        "in_transit_delay_gate",
-        route_after_in_transit_gate,
-        {"retry": "in_transit_delay_gate", "proceed": "mock_carrier_signal"},
-    )
+    graph.add_edge("in_transit_delay_gate", "mock_carrier_signal")
     graph.add_edge("mock_carrier_signal", "tracking_agent")
     graph.add_conditional_edges(
         "tracking_agent",
-        route_after_tracking,
-        {"retry": "mock_carrier_signal", "proceed": END},
+        route_after_in_transit_cycle,
+        {"retry": "in_transit_delay_gate", "proceed": END},
     )
 
     return graph.compile()

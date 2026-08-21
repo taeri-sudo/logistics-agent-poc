@@ -66,6 +66,10 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
   0개, 시나리오 6/10)가 진짜 부분완료(시나리오 9, 일부 배송+일부 영구제외)와 같은 "부분완료"
   라벨을 쓰던 걸 분리. "부분"은 대비되는 "온 것"이 있다는 전제인데 vacuous case는 그 전제가
   성립하지 않아 혼동을 유발했음
+- [x] 6단계 후속: 배송중게이트 order-wide 블로킹 gap 수정 — 재현 시나리오(main.py 시나리오
+  12)로 실측 확인 후 "패키지별 개별 판단"으로 구현. `in_transit_delay_gate`/`mock_carrier_signal`/
+  추적agent를 하나의 통합 self-loop로 재구성하고, `mock_carrier_signal`이 미해소 지연 패키지를
+  스스로 건너뛰도록 함 — 상세는 "검토 후 현재 구조 유지로 확정" 절 참고
 
 상세 실행 기록·시나리오 검증·gap 발견 과정은 전부 [JOURNAL.md](JOURNAL.md) 참고.
 
@@ -312,9 +316,9 @@ class CompensationRecord(TypedDict):
 | 액션 | 포장agent | 액션 | 포장 완료 처리 (Package 단위 일괄, "포장중" 중간상태는 item 레벨엔 없음) |
 | 판단+반복 | 피킹지연게이트 | self-loop 조건분기 + Stage1 자동판정 | Item 기반. `item_delay_reason` 있는 item만 대상, 해소되면 피킹완료 확정, 미해소면 자기루프. retry_count 초과 시 Stage1 판정(`_ITEM_RECOVERABLE`)으로 즉시 귀결 — 회복불가(파손)면 품목취소, 회복가능(재고부족/검수불량/통관지연)이면 `fulfillment_preference_on_delay`로 부분수령/계속대기 자동 적용 (v16) |
 | 판단+반복 | 포장대기게이트 | self-loop 조건분기 (순수 워처) | 미봉인 Package(`tracking_number is None`) 기반. 스스로 해소하지 않고 감시만 함 — 실제 해소는 피킹지연게이트+패키지조립agent 재봉인으로 일어남. retry_count 초과시 보상조치(환불) 실행 (v16, 舊 escalated=true) |
-| 판단+반복 | 배송중게이트 | self-loop 조건분기 | 봉인된 Package(`tracking_number` 있음) 기반. `delay_categories` 체크(외부신호/폴링 데모는 고정 매핑), 자연재해는 재시도 없이 즉시 보상조치(환불). 그 외 지연은 매 틱마다 먼저 Supervisor(predict_delay_escalation)에게 회복가능 여부를 묻고(`escalate_now=True`=회복불가로 재해석), 회복불가면 즉시 보상조치, 회복가능이면 재시도하다 retry_count 초과 시 안전장치로 보상조치 (v16, 舊 escalated=true) |
-| 액션 | mock_carrier_signal | 액션 (POC 전용 신호 발생기) | 봉인된 Package를 `포장완료→출고됨→배송중→배송완료` 고정 시퀀스로 전진시키고 GPS placeholder 채움. 실제 서비스에서는 택배사 웹훅/Kafka 이벤트가 이 자리를 대체 |
-| 판단+반복 | 추적agent | self-loop 조건분기 + 파생 재계산 | 신호를 만들지 않고 현재 item_status/delay_categories만 보고 Order 파생값(internal_order_status, customer_facing_status) 재계산, 배송완료 도달 여부 판단 → 도달시 종료, 아니면 mock_carrier_signal로 재진입 |
+| 판단+반복 | 배송중게이트 | self-loop 조건분기 (mock_carrier_signal/추적agent와 통합 루프) | 봉인된 Package(`tracking_number` 있음) 기반. `delay_categories` 체크(외부신호/폴링 데모는 고정 매핑), 자연재해는 재시도 없이 즉시 보상조치(환불). 그 외 지연은 매 틱마다 먼저 Supervisor(predict_delay_escalation)에게 회복가능 여부를 묻고(`escalate_now=True`=회복불가로 재해석), 회복불가면 즉시 보상조치, 회복가능이면 재시도하다 retry_count 초과 시 안전장치로 보상조치 (v16, 舊 escalated=true). **order-wide 블로킹 gap 수정(아래 참고) 이후로는 mock_carrier_signal→추적agent와 무조건 edge로 묶인 하나의 통합 루프**라 배송 시작 전 1회가 아니라 배송 진행 중에도 매 틱 재호출된다 |
+| 액션 | mock_carrier_signal | 액션 (POC 전용 신호 발생기) | 봉인된 Package 중 **미해소 지연(`delay_categories` 있고 `compensation` 없음)이 없는 것만** `포장완료→출고됨→배송중→배송완료` 고정 시퀀스로 전진시키고 GPS placeholder 채움 — 지연 중인 패키지는 건너뛰어(`[대기]` 로그) 같은 주문의 다른 패키지를 막지 않는다(원칙6, 아래 "제거/통합된 것들" 참고). 실제 서비스에서는 택배사 웹훅/Kafka 이벤트가 이 자리를 대체 |
+| 판단+반복 | 추적agent | self-loop 조건분기 + 파생 재계산 | 신호를 만들지 않고 현재 item_status/delay_categories만 보고 Order 파생값(internal_order_status, customer_facing_status) 재계산, 배송완료 도달 여부 판단. `route_after_in_transit_cycle`이 "미배송 item이 있는가"와 "미해소 지연 패키지가 있는가"를 함께 봐서 → 둘 다 없으면 종료, 있으면 배송중게이트로 재진입(舊 route_after_tracking, route_after_in_transit_gate 흡수) |
 | 부가 | 알림agent | 조건부 발송 (비차단) | notification_enabled 확인 후 notification_log에 기록. 워크플로우를 막지 않음 |
 
 **구현 현황**: UserProfile조회 / 주문요청 / 주문검증 / Supervisor(더미) / 창고처리 / 피킹지연게이트 / 패키지조립 /
@@ -337,6 +341,12 @@ class CompensationRecord(TypedDict):
   대체. 포장대기게이트/배송중게이트가 공유하던 필드라 두 게이트 모두 보상조치(환불) 모델로 통합
 - ~~Item.escalated (bool)~~ → 제거 (v16), `pending_decision`/`decision_log`로 대체 — 판단(현재
   열린 결정)과 기록(해소된 결정)을 원칙3대로 분리
+- ~~route_after_in_transit_gate~~ → `route_after_tracking`과 통합해 `route_after_in_transit_cycle`로
+  재명명(tracking.py). order-wide 블로킹 gap 수정(아래 "검토 후 확정" 참고) — "미해소 지연 패키지가
+  있는가"와 "미배송 item이 있는가"가 사실상 하나의 종료 판단이라 라우터를 합쳤다. 동시에
+  `in_transit_delay_gate → mock_carrier_signal`을 조건분기에서 무조건 edge로 바꾸고, 대신
+  `mock_carrier_signal`이 미해소 지연 패키지를 스스로 건너뛰도록 해 "패키지별 개별 판단"을
+  달성했다(라우팅에서 전체 차단하는 대신 신호 발생기가 개별 패키지 단위로 걸러냄)
 
 ---
 
@@ -471,6 +481,21 @@ class CompensationRecord(TypedDict):
   **재검토 조건**: 실제 CS 진입점이 생겨서 "전체무산인데 이유별로 다른 안내가 필요하다"는
   요구가 실제로 나올 때.
 
+- **배송중게이트 order-wide 블로킹 gap — 패키지별 개별 판단으로 수정 완료 (해결됨).**
+  舊 `route_after_in_transit_gate`가 "주문에 속한 패키지 중 하나라도 미해소 지연이 있는가"를
+  기준으로 삼아, 지연이 전혀 없는 패키지도 같은 주문의 다른 패키지가 해소될 때까지
+  `mock_carrier_signal`로 못 넘어가던 gap. 재현 시나리오(main.py 시나리오 12 — 배송지 2곳,
+  한쪽만 `_PACKAGE_DELAY_SIGNAL` 지연)로 실측 확인 후, "패키지별 개별 판단" 방향으로 수정:
+  1. `in_transit_delay_gate`/`mock_carrier_signal`/`추적agent`를 무조건 edge로 묶어 하나의
+     통합 self-loop로 재구성(`route_after_in_transit_cycle`이 종료 조건 통합 판단, 舊
+     `route_after_in_transit_gate` + `route_after_tracking`을 흡수 — 위 "제거/통합된 것들" 참고).
+  2. `mock_carrier_signal`이 미해소 지연(`delay_categories` 있고 `compensation` 없음) 패키지를
+     스스로 건너뛰도록 함 — 배송 여부를 라우터가 전체 단위로 미리 막는 대신, 신호 발생기가
+     패키지 단위로 걸러내는 구조로 바뀜.
+  부수 효과: `in_transit_delay_gate`가 이제 배송 시작 전 1회가 아니라 배송 진행 중에도 매 틱
+  재호출된다 — "배송중게이트"라는 이름이 오히려 이제야 실제 동작과 맞아떨어짐(舊 open question
+  "이름/구조 재검토"도 이걸로 해소). 재검토 조건 없음 — 시나리오 12로 재현·검증 완료.
+
 ---
 
 <a id="open-questions"></a>
@@ -522,23 +547,6 @@ class CompensationRecord(TypedDict):
   Package 도메인 보상조치에도 재사용(Item 도메인 취소와 같은 라벨로 통일) — 단 이 값은 원래
   "이 상품 자체를 준비할 수 없다"는 Item 도메인 어휘라 의미가 다소 늘어남, (2) "환불됨" 같은 새
   값을 신설해 취소와 명확히 구분. 실제로 문제가 되는 시점(알림agent 구현 등)에 재검토.
-- **배송중게이트의 재시도 라우팅이 주문 전체(order-wide) 단위로 패키지를 블로킹한다.**
-  `route_after_in_transit_gate`가 "이 주문에 속한 패키지 중 하나라도 미해소 지연이 있는가"를
-  기준으로 삼기 때문에(패키지별이 아니라 전체 기준), 지연이 전혀 없는 패키지도 같은 주문의 다른
-  패키지가 해소/보상조치될 때까지 `mock_carrier_signal`로 못 넘어가 실제 배송 진행 자체가
-  시작되지 못한다. 원칙6("각 Package/Item이 준비되는 대로 독립 진행")과 문면상 어긋나는 지점 —
-  JOURNAL.md 4단계 "부가발견 4번"이 방어한 "lockstep은 원칙6 위반이 아니다"는 논의는
-  `mock_carrier_signal ↔ tracking_agent` 순환 **안에서의** 진행 얘기였고, 그 순환에 **들어가는
-  시점 자체**가 다른 패키지의 지연에 막힌다는 건 별개 문제라 그 논의로 커버되지 않는다.
-  **재현 조건**: 한 주문이 배송지 2곳 이상으로 쪼개져 각각 다른 Package로 봉인되고, 그중
-  하나만 `_PACKAGE_DELAY_SIGNAL`에 걸린 경우 — 지금 11개 시나리오 중 이 조합을 실행하는
-  것은 없어(시나리오8은 배송지 2곳이지만 둘 다 지연 없음) 실행으로 드러난 적이 없는 gap이다.
-  **해법 후보 두 가지**: (1) `route_after_in_transit_gate`를 패키지별 판단으로 바꿔 지연 없는
-  패키지는 먼저 `mock_carrier_signal`로 보내고 지연 패키지만 게이트에 남긴다, (2) POC 단순화로
-  그대로 인정하고 여기 기록만 해둔다. 다음 세션에서 위 재현 조건으로 실측한 뒤 결정할 것 —
-  **`in_transit_delay_gate`의 이름/구조(예: tracking_agent와의 역할 재검토) 논의도 이 실측
-  결과가 나올 때까지 보류한다.**
-
 <a id="dead-fields"></a>
 ## 미구현/죽은 필드 종합
 
@@ -596,5 +604,5 @@ class CompensationRecord(TypedDict):
 
 <a id="production-notes"></a>
 ## 실무 전환 시 고려사항
-- `main.py`의 데모 시나리오 11개는 POC 검증용이다. 실제 서비스화 시 `main.py`(순수 진입점)와
+- `main.py`의 데모 시나리오 12개는 POC 검증용이다. 실제 서비스화 시 `main.py`(순수 진입점)와
   `tests/`(시나리오 이관, pytest 등 정식 프레임워크로) 분리가 필요하다.

@@ -282,6 +282,33 @@ def run_demo() -> None:
     )
     _print_result(result_supervisor_predict)
 
+    print()
+    print("=" * 60)
+    print("시나리오 12: 배송지 2곳, 한쪽만 지연 → 무지연 패키지가 지연 패키지 해소까지 블로킹되는지 확인")
+    print("=" * 60)
+    result_partial_block = app.invoke(
+        {
+            "user_id": "user-001",
+            "confirmed_order_items": [
+                {
+                    # ADDR-HOME → 교통지연(resolve_at=1), 1틱 재시도 후 해소되는 패키지
+                    "item_id": "SKU-501",
+                    "delivery_address_id": "ADDR-HOME",
+                    "location": {"zone": "A", "shelf": "01", "bin": "01"},
+                },
+                {
+                    # ADDR-OFFICE → _PACKAGE_DELAY_SIGNAL에 없는 완전히 깨끗한 item.
+                    # 원칙6대로라면 SKU-501의 지연과 무관하게 즉시 mock_carrier_signal로 전진해야 한다
+                    "item_id": "SKU-505",
+                    "delivery_address_id": "ADDR-OFFICE",
+                    "location": {"zone": "B", "shelf": "02", "bin": "02"},
+                },
+            ],
+            "payment_status_hint": "완료",
+        }
+    )
+    _print_result(result_partial_block)
+
 
 def _print_result(state: dict) -> None:
     order = state.get("order", {})

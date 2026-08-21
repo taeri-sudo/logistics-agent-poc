@@ -30,20 +30,25 @@ flowchart TD
     PKA --> PWG{{packaging_wait_gate}}
     PWG -- retry --> PWG
     PWG -- proceed --> ITG{{in_transit_delay_gate}}
-    ITG -- retry --> ITG
-    ITG -- proceed --> MCS[mock_carrier_signal]
+    ITG --> MCS[mock_carrier_signal]
     MCS --> TRA{{tracking_agent}}
-    TRA -- retry --> MCS
+    TRA -- retry --> ITG
     TRA -- proceed --> END2((END))
 ```
 
 **도형 범례**: `((원))` START/END · `[사각형]` 판단 없는 일반 함수 노드 · `{다이아몬드}` 조건분기
-(self-loop 없음) · `(둥근사각형)` Supervisor 판단(self-loop 없음) · `{{육각형}}` self-loop 게이트
-(판단+반복, `retry` 화살표가 자기 자신으로 돌아감).
+(self-loop 없음) · `(둥근사각형)` Supervisor 판단(self-loop 없음) · `{{육각형}}` 반복 게이트
+(판단+반복. `retry` 화살표가 자기 자신 또는 같은 루프 내 다른 노드로 돌아감).
 
-`mock_carrier_signal ↔ tracking_agent`는 엄밀히는 한 노드의 self-loop가 아니라 **두 노드가
-번갈아 도는 순환**입니다 — `tracking_agent`가 아직 배송완료에 도달하지 못한 봉인 패키지를 발견하면
-`mock_carrier_signal`로 되돌아가 다음 이벤트를 기다립니다.
+`in_transit_delay_gate → mock_carrier_signal → tracking_agent`는 각 노드가 따로 self-loop를
+도는 게 아니라 **세 노드가 하나의 통합 루프**로 묶여 있습니다 — `in_transit_delay_gate`가 이번
+틱의 지연을 처리하고(미해소 지연 패키지는 그대로 둠), `mock_carrier_signal`이 그중 지연이
+없는 패키지만 전진시키고, `tracking_agent`가 파생값을 재계산해 "아직 배송완료 못한 item이
+있거나 미해소 지연 패키지가 남아있으면" `in_transit_delay_gate`로 되돌아갑니다
+(`route_after_in_transit_cycle`). 지연 패키지 하나가 같은 주문의 무지연 패키지까지
+order-wide로 막던 gap을 고치며 이렇게 재구성했습니다 — 이전에는 `in_transit_delay_gate`가
+배송 시작 전 딱 한 번만 전체를 검사하고, 일단 통과하면 `mock_carrier_signal ↔ tracking_agent`
+둘만 따로 순환했습니다(DESIGN.md "검토 후 현재 구조 유지로 확정" 참고).
 
 | 노드 | 분류 | 설명 (각 노드 함수 docstring 기준) |
 |---|---|---|
@@ -56,9 +61,9 @@ flowchart TD
 | `package_assembly_agent` | 집계 · 조건카운트 | 미배정 item을 배송지별 Package로 묶고, `required==arrived`면 봉인+`tracking_number` 발급 |
 | `packaging_agent` | 액션 | 봉인된 Package 소속의 피킹완료 item을 일괄 포장완료로 전이 |
 | `packaging_wait_gate` | 판단+반복 · self-loop (순수 워처) | 미봉인 Package(`tracking_number is None`) 감시만 함, 스스로 해소하지 않음. 재시도 예산 소진 시 보상조치(환불) |
-| `in_transit_delay_gate` | 판단+반복 · self-loop | 봉인된 Package의 `delay_categories` 체크. 자연재해는 즉시 보상조치, 그 외엔 매 틱 Supervisor(`predict_delay_escalation`, Gemini 실제 호출)에게 회복가능 여부를 먼저 묻고 판단 |
-| `mock_carrier_signal` | 액션 (POC 전용 신호 발생기) | 봉인된 Package를 `포장완료→출고됨→배송중→배송완료` 고정 시퀀스로 전진, GPS placeholder 채움. 실제 서비스라면 택배사 웹훅/Kafka 이벤트가 이 자리를 대체 |
-| `tracking_agent` | 판단+반복 · 파생 재계산 | 신호를 만들지 않고 현재 `item_status`/`delay_categories`만 보고 Order 파생값(`internal_order_status`, `customer_facing_status`) 재계산, 배송완료 도달 여부 판단 |
+| `in_transit_delay_gate` | 판단+반복 · 통합 루프(위 참고) | 봉인된 Package의 `delay_categories` 체크. 자연재해는 즉시 보상조치, 그 외엔 매 틱 Supervisor(`predict_delay_escalation`, Gemini 실제 호출)에게 회복가능 여부를 먼저 묻고 판단. `mock_carrier_signal`/`tracking_agent`와 무조건 edge로 묶여 배송 시작 전 1회가 아니라 배송 진행 중에도 매 틱 재호출됨 |
+| `mock_carrier_signal` | 액션 (POC 전용 신호 발생기) | 봉인된 Package 중 **미해소 지연(`delay_categories` 있고 `compensation` 없음)이 없는 것만** `포장완료→출고됨→배송중→배송완료` 고정 시퀀스로 전진, GPS placeholder 채움. 지연 중인 패키지는 건너뛰어 같은 주문의 다른 패키지를 막지 않음(원칙6). 실제 서비스라면 택배사 웹훅/Kafka 이벤트가 이 자리를 대체 |
+| `tracking_agent` | 판단+반복 · 파생 재계산 | 신호를 만들지 않고 현재 `item_status`/`delay_categories`만 보고 Order 파생값(`internal_order_status`, `customer_facing_status`) 재계산. `route_after_in_transit_cycle`이 "미배송 item이 있는가"와 "미해소 지연 패키지가 있는가"를 함께 판단해 → 있으면 `in_transit_delay_gate`로 재진입, 둘 다 없으면 종료 |
 
 ## 핵심 설계 원칙 (6가지)
 
@@ -82,7 +87,7 @@ flowchart TD
 venv\Scripts\python.exe main.py
 ```
 
-테스트 프레임워크는 없습니다 — `main.py`의 데모 시나리오 11개를 실행해 출력(JSON 요약)으로
+테스트 프레임워크는 없습니다 — `main.py`의 데모 시나리오 12개를 실행해 출력(JSON 요약)으로
 검증합니다. `in_transit_delay_gate`가 지연 카테고리를 만나면 Supervisor의
 `predict_delay_escalation`(Google Gemini 실제 호출)을 탑니다. `.env`의 `GOOGLE_API_KEY`가
 없으면 이 호출이 실패하고 `escalate_now=False`로 폴백하므로 데모 자체는 API 키 없이도 끝까지

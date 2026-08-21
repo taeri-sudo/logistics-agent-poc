@@ -234,6 +234,15 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
     재해석), 회복불가로 나오면 즉시 보상조치. 회복가능(escalate_now=False)이면 기존 재시도
     예산으로 지켜보다가, 예산까지 소진되면(끝내 해소 안 됨) 안전장치로 보상조치에 수렴한다 —
     사람을 기다리는 "escalated" 대기 상태를 persist하지 않는다.
+
+    舊 구조에서는 배송 시작 전 한 번만 호출됐지만, order-wide 블로킹 gap 수정(DESIGN.md 참고)
+    이후로는 mock_carrier_signal/추적agent와 하나의 통합 루프로 묶여 배송 진행 중에도 매 틱
+    재호출된다. `_lookup_package_delay_signal`은 item_id 기반 고정 매핑이라 이미 해소된 패키지를
+    다시 봐도 똑같은 신호를 돌려주는데, "이미 해소됨"과 "아직 한 번도 안 봄"을 구분할 안전한
+    필드가 없다(`retry_count`/`policy_version_applied` 모두 포장대기게이트와 공유돼 재사용
+    불가 — 시도했다가 첫 방문까지 걷어차는 버그로 확인). 그래서 해소 분기는 재실행돼도
+    `delay_categories`를 다시 []로 세팅할 뿐이라 멱등하고, 로그만 재실행 시 `was_active`로
+    걸러 첫 해소 순간에만 찍는다(아래 참고).
     """
     order = state["order"]
     packages: list[PackageState] = list(state.get("packages", []))
@@ -263,6 +272,7 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
             continue
 
         if resolve_at is not None and pkg["retry_count"] >= resolve_at:
+            was_active = bool(pkg["delay_categories"])
             packages[pos] = cast(
                 PackageState,
                 {
@@ -273,7 +283,11 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
                     "policy_version_applied": POLICY_VERSION,
                 },
             )
-            print(f"  [해소] {pkg['package_id']} {categories} → 지연없음")
+            # 정적 매핑(_lookup_package_delay_signal)은 이미 해소된 패키지를 다시 봐도 같은
+            # 신호를 돌려줘 이 분기가 이후 틱에도 계속 재실행된다(멱등, 위 docstring 참고) —
+            # was_active로 "진짜 지금 막 해소되는 순간"에만 로그를 남겨 중복 출력을 막는다.
+            if was_active:
+                print(f"  [해소] {pkg['package_id']} {categories} → 지연없음")
             continue
 
         low_stock_item_count = sum(
@@ -326,10 +340,6 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
     return {"packages": packages}
 
 
-def route_after_in_transit_gate(state: GraphState) -> str:
-    """조건분기: 재시도 예산이 남은 지연 패키지가 있으면 재시도."""
-    pending = any(
-        pkg["tracking_number"] is not None and pkg["delay_categories"] and pkg["compensation"] is None
-        for pkg in state.get("packages", [])
-    )
-    return "retry" if pending else "proceed"
+# route_after_in_transit_gate는 제거됐다 (order-wide 블로킹 gap 수정) — "미해소 지연 패키지가
+# 있는가" 조건은 tracking.py의 route_after_in_transit_cycle이 "미배송 item이 있는가" 조건과
+# 합쳐서 대신 판단한다. 두 조건이 사실상 하나의 종료 판단이라 라우터를 통합했다 (DESIGN.md 참고).

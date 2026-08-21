@@ -634,3 +634,78 @@ DESIGN.md의 "사람 개입 워크플로우" 절에 있는 최종 결론(도메�
 0 errors). 시나리오11(Supervisor 실 Gemini 호출)은 이번 실행에서 실제로 `escalate_now=True`가
 나와 보상조치(환불) 경로까지 실측 확인함 — 이 시나리오는 비결정론적이라 항상 이 경로를 타는
 것은 아니다(폴백/`escalate_now=False`면 시나리오5와 동일하게 정상 해소로 끝남).
+
+## 7단계: 배송중게이트 order-wide 블로킹 gap — 재현·실측·수정
+
+6단계 후속에서 기록만 해두고 "다음 세션에서 재현 조건으로 실측한 뒤 결정" 하기로 미뤄뒀던
+항목(DESIGN.md "아직 결정 안 된 것" — 배송중게이트가 주문 전체 단위로 패키지를 블로킹하는 gap)을
+이번 세션에서 재현·실측하고 "패키지별 개별 판단" 방향으로 수정했다.
+
+**재현 시나리오 (main.py 시나리오 12)**: 배송지 2곳(ADDR-HOME/ADDR-OFFICE)에 각각 item 1개씩,
+ADDR-HOME 쪽만 `_PACKAGE_DELAY_SIGNAL`에 등록된 `SKU-501`(교통지연, resolve_at=1)을 배정.
+`_PACKAGE_DELAY_SIGNAL`에 이미 있었지만 그동안 어떤 시나리오도 쓰지 않던 항목이라 기존
+회귀에 영향 없이 재사용 가능했다.
+
+**수정 전 실측 로그(요지)**: 지연 패키지가 `[재시도]`→`[해소]`로 게이트를 2번 도는 동안
+`mock_carrier_signal`이 단 한 번도 호출되지 않았다 — 무지연 패키지(ADDR-OFFICE)도 `포장완료`
+상태 그대로 멈춰 있었다는 뜻. 게이트가 완전히 clear된 다음에야 `mock_carrier_signal`이 처음
+호출되면서 **두 패키지가 동시에** `출고됨`으로 전진했다. "지연 없는 패키지가 같은 주문의 다른
+패키지 때문에 배송 시작 자체를 못 한다"는 gap이 실측으로 확인된 순간.
+
+**근본 원인**: `mock_carrier_signal`(tracking.py)은 애초에 `delay_categories`를 전혀 보지
+않는다 — 봉인된 패키지면 지연 여부와 무관하게 무조건 한 단계 전진시키는 함수였다. 그래서
+지연을 인지 못 하는 `mock_carrier_signal` 대신, `route_after_in_transit_gate`가 "이 주문
+패키지 전부가 clear될 때까지 아무도 통과 못 시킨다"는 거친 전체 블로킹으로 그 자리를
+대신 메꾸고 있었던 것 — 이게 order-wide 블로킹의 실체였다. 또한 이 구조에서
+`in_transit_delay_gate`는 배송 시작 **전**에 딱 한 번만 전체 패키지를 검사하고,
+`mock_carrier_signal↔tracking_agent` 루프에 들어가면 다시는 호출되지 않았다("배송중"에는
+실제로 지연을 재검사하지 않는 구조).
+
+JOURNAL.md 4단계 "부가발견 4번"(lockstep)이 "원칙6 위반 아님"이라 방어했던 건
+`mock_carrier_signal↔tracking_agent` 순환에 **진입한 이후**의 진행 얘기였다 — 이번 gap은
+그 순환에 **들어가는 시점 자체**가 막힌다는 별개 문제라는 DESIGN.md의 사전 정리가 코드
+추적으로도 그대로 확인됐다.
+
+**수정 방향 결정**: 사용자와 논의 후 "패키지별 개별 판단"으로 확정(POC 단순화로 인정하는
+대안은 기각). 이 아키텍처(배치로 전체 리스트를 처리하는 노드 함수 + LangGraph conditional
+edge, `Send` API 미사용)에서 "패키지 A는 통과, 패키지 B는 재시도"를 한 틱 안에서 각기 다른
+다음 노드로 보내는 건 표현 불가능하다 — 그래서 유일하게 구조에 맞는 해법은 **게이트+신호+추적을
+하나의 통합 self-loop로 합치고, 신호 발생기 자체가 지연 중인 패키지를 건너뛰게 만드는 것**.
+
+**구현**:
+1. `mock_carrier_signal`에 스킵 조건 추가 — 미해소 지연(`delay_categories` 있고 `compensation`
+   없음)인 패키지는 건너뛰고 `[대기]` 로그만 남긴다. 보상조치된 패키지는 기존처럼 계속
+   전진(비차단 원칙 유지) — `delay_categories`가 남아있어도 `compensation`이 세팅됐으면
+   스킵 대상이 아니다.
+2. `route_after_tracking`(tracking.py)을 `route_after_in_transit_cycle`로 개명하고
+   `route_after_in_transit_gate`(delay_gates.py)의 "미해소 지연 패키지가 있는가" 조건을
+   흡수 — 두 조건이 사실상 하나의 종료 판단이라 라우터를 통합했다(舊 `route_after_in_transit_gate`
+   제거).
+3. graph.py: `in_transit_delay_gate → mock_carrier_signal`을 조건분기에서 무조건 edge로
+   바꾸고, `tracking_agent`의 retry 목적지를 舊 `mock_carrier_signal`에서 `in_transit_delay_gate`로
+   변경 — 이제 배송중게이트→mock_carrier_signal→추적agent가 하나의 loop로 매 틱 돈다.
+
+**구현 중 시행착오 — "이미 해소된 패키지 재검사" 가드를 안전하게 만들 수 없었던 이유.**
+`in_transit_delay_gate`가 이제 매 틱 재호출되는데, `_lookup_package_delay_signal`이 item_id
+기반 정적 매핑이라 이미 해소된 패키지를 다시 봐도 똑같은 신호를 돌려준다 — "이미 해소됨"과
+"아직 한 번도 안 봄"을 구분해 재처리를 건너뛰는 가드를 처음엔 `pkg["last_checked_at"] is not
+None`으로 시도했는데, `PackageState.last_checked_at`은 **패키지 생성 시점부터 항상 non-null**
+(assembly.py `_new_package`에서 `now`로 초기화)이라 이 가드는 **첫 방문조차 걷어차버리는
+치명적 버그**였다(시나리오 12를 다시 돌려서 SKU-501의 `[재시도]` 자체가 사라지는 걸 보고
+발견). `retry_count`/`policy_version_applied`로 바꿔 시도해도 마찬가지로 실패했다 — 둘 다
+포장대기게이트와 **공유하는 필드**라서, 봉인 전 포장대기게이트에서 재시도하다 넘어온 패키지는
+`in_transit_delay_gate` 입장에서는 첫 방문인데도 이미 값이 세팅돼 있어 똑같이 걷어차인다.
+기존 필드로는 "이 gate가 이 패키지를 이미 처리했는가"를 안전하게 구분할 수 없다는 결론 —
+새 필드를 추가하는 대신, **해소 분기 자체는 재실행돼도 멱등**하다는 점을 이용해 로그 중복만
+`was_active`(분기 진입 시점의 `pkg["delay_categories"]`가 비어있지 않았는가)로 걸러내는
+쪽으로 최종 정리했다. 상태 변경 로직은 손대지 않고 `print()` 호출만 조건부로 만든 것이라
+안전하다.
+
+**실행 검증**: 수정 전/후 전체 stdout을 UTF-8로 저장해 diff(cp949 콘솔 리다이렉트는 인코딩이
+깨져 비교 불가능했음 — `PYTHONIOENCODING=utf-8`로 재실행해서 해결). 시나리오 1/6/10은
+`trace_id`(랜덤 UUID)만 다르고 완전히 동일. 시나리오 2/3/4/7/8/9/11은 `in_transit_delay_gate`가
+매 틱 재호출되며 `[배송중게이트] 완료` 로그가 추가로 몇 줄 더 찍히는 것 외엔(지연이 없어 매번
+no-op) 최종 JSON 동일. 시나리오 11은 실 Gemini 호출이라 `escalation_reasoning` 문구가
+매번 달라지는 기존 비결정성 그대로(결정 자체 — 보상조치/환불 — 는 동일). 시나리오 5/12에서
+기대했던 "무지연 패키지가 지연 해소를 기다리지 않고 먼저 전진" 동작을 로그로 직접 확인.
+`pyright` 0 errors.

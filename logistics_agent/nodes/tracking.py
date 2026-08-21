@@ -34,7 +34,10 @@ def mock_carrier_signal(state: GraphState) -> GraphState:
     지금은 그 이벤트를 흉내 내어, 봉인된 Package를 패키지 단위로 `포장완료→출고됨→배송중→배송완료`
     고정 시퀀스에서 한 틱씩 전진시키고 GPS placeholder를 채운다. 같은 패키지의 모든 item에 동일하게
     반영한다(원칙1: 캐리어 신호는 Package 사건). 보상조치(환불)된 패키지도 계속 전진시킨다
-    ("비차단" 원칙 — 백그라운드 자동처리는 사람/판단 결과와 무관하게 계속됨).
+    ("비차단" 원칙 — 백그라운드 자동처리는 사람/판단 결과와 무관하게 계속됨). 단, 아직 보상조치로
+    귀결되지 않은 미해소 지연(`delay_categories`)이 있는 패키지는 건너뛴다 — `in_transit_delay_gate`가
+    매 틱 먼저 그 지연을 처리하므로, 같은 주문의 다른(무지연) 패키지가 그걸로 인해 함께 멈출 이유는
+    없다(원칙6, DESIGN.md "배송중게이트 order-wide 블로킹" 참고).
     """
     order = state["order"]
     item_list: list[Item] = list(order["item_list"])
@@ -44,6 +47,9 @@ def mock_carrier_signal(state: GraphState) -> GraphState:
     advanced = 0
     for pos, pkg in enumerate(packages):
         if pkg["tracking_number"] is None:
+            continue
+        if pkg["delay_categories"] and pkg["compensation"] is None:
+            print(f"  [대기] {pkg['package_id']} 미해소 지연으로 전진 보류")
             continue
 
         member_idxs = [i for i, it in enumerate(item_list) if it["package_ref"] == pkg["package_id"]]
@@ -153,13 +159,23 @@ def tracking_agent(state: GraphState) -> GraphState:
     return {"order": order}
 
 
-def route_after_tracking(state: GraphState) -> str:
-    """조건분기: 봉인된 패키지 중 아직 배송완료에 도달하지 못한 것이 있으면 mock_carrier_signal로
-    되돌아가 다음 이벤트를 기다린다."""
+def route_after_in_transit_cycle(state: GraphState) -> str:
+    """조건분기: 배송중게이트→mock_carrier_signal→추적agent를 하나로 묶은 통합 루프의 종료 조건.
+
+    두 가지를 모두 확인한다 — 봉인된 패키지 중 아직 배송완료에 도달하지 못한 item이 있는가
+    (舊 route_after_tracking), 그리고 아직 보상조치로 귀결되지 않은 미해소 지연 패키지가 있는가
+    (舊 route_after_in_transit_gate, delay_gates.py에서 흡수). 흡수한 이유: 두 조건 중 하나라도
+    참이면 in_transit_delay_gate로 돌아가 다음 틱을 처리해야 하므로 사실상 하나의 종료 판단이다
+    (DESIGN.md "배송중게이트 order-wide 블로킹" 참고).
+    """
     packages = state.get("packages", [])
     sealed_ids = {pkg["package_id"] for pkg in packages if pkg["tracking_number"] is not None}
     item_list = state["order"]["item_list"]
-    pending = any(
+    shipment_pending = any(
         item["package_ref"] in sealed_ids and item["item_status"] != "배송완료" for item in item_list
     )
-    return "retry" if pending else "proceed"
+    delay_pending = any(
+        pkg["tracking_number"] is not None and pkg["delay_categories"] and pkg["compensation"] is None
+        for pkg in packages
+    )
+    return "retry" if (shipment_pending or delay_pending) else "proceed"
