@@ -2,7 +2,7 @@
 
 셋 다 같은 뼈대: 조건 미해소면 자기 자신으로 self-loop. Item(피킹지연게이트)은 재시도 예산을
 넘기면 Stage1 판정(회복불가→품목취소 / 회복가능→선호도 자동적용)으로 즉시 귀결되고,
-Package(조립대기게이트/배송중게이트)는 재시도 예산을 넘기거나 회복불가로 분류되면 보상조치
+Package(포장대기게이트/배송중게이트)는 재시도 예산을 넘기거나 회복불가로 분류되면 보상조치
 (환불) 실행으로 즉시 귀결된다 — 어느 쪽도 "escalated"로 표시만 해두고 사람을 기다리는 대기
 상태를 persist하지 않는다(v16 재설계, DESIGN.md "사람 개입 워크플로우" 참고).
 """
@@ -175,7 +175,7 @@ def route_after_picking_gate(state: GraphState) -> str:
 
 
 def _compensate(pkg: PackageState, reasoning: str, now: str) -> PackageState:
-    """Package 보상조치(환불) 실행 — 조립대기게이트/배송중게이트 공통. POC 범위: 환불만
+    """Package 보상조치(환불) 실행 — 포장대기게이트/배송중게이트 공통. POC 범위: 환불만
     (재발송은 fulfillment 재진입이 필요한 별도 과제 — 확장 지점)."""
     compensation: CompensationRecord = {"action": "환불", "executed_at": now}
     return cast(
@@ -184,8 +184,8 @@ def _compensate(pkg: PackageState, reasoning: str, now: str) -> PackageState:
     )
 
 
-def assembly_wait_gate(state: GraphState) -> GraphState:
-    """조립대기게이트: 미봉인 Package를 감시만 한다 (순수 워처, 스스로 해소하지 않음).
+def packaging_wait_gate(state: GraphState) -> GraphState:
+    """포장대기게이트: 미봉인 Package를 감시만 한다 (순수 워처, 스스로 해소하지 않음).
 
     실제 해소는 피킹지연게이트가 item_delay_reason을 풀고 패키지조립agent가 재봉인하는
     경로로만 일어난다 — 이 게이트에 진입했을 때 이미 봉인돼 있으면 그대로 통과. 재시도
@@ -213,11 +213,11 @@ def assembly_wait_gate(state: GraphState) -> GraphState:
             print(f"  [재시도] {pkg['package_id']} 미봉인 retry_count={new_retry}")
 
     waiting = sum(1 for p in packages if p["tracking_number"] is None and p["compensation"] is None)
-    print(f"[조립대기게이트] 완료 - 대기중(재시도 예산 남음) {waiting}개")
+    print(f"[포장대기게이트] 완료 - 대기중(재시도 예산 남음) {waiting}개")
     return {"packages": packages}
 
 
-def route_after_assembly_wait_gate(state: GraphState) -> str:
+def route_after_packaging_wait_gate(state: GraphState) -> str:
     """조건분기: 재시도 예산이 남은 미봉인 패키지가 있으면 재시도."""
     pending = any(
         pkg["tracking_number"] is None and pkg["compensation"] is None

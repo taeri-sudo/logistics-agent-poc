@@ -276,7 +276,7 @@ Stage1 판정(`delay_gates.py`의 `picking_delay_gate`)은 재시도 예산(`MAX
 *PackageState*
 | 필드 | 변경 |
 |---|---|
-| ~~escalated: bool~~ | `compensation: CompensationRecord \| None`로 대체 — 조립대기게이트/배송중게이트가 공유하는 필드였어서 **두 게이트 모두** 같은 모델로 통합(5단계 초안은 배송중게이트만 다뤘음, JOURNAL.md 6단계 참고) |
+| ~~escalated: bool~~ | `compensation: CompensationRecord \| None`로 대체 — 포장대기게이트/배송중게이트가 공유하는 필드였어서 **두 게이트 모두** 같은 모델로 통합(5단계 초안은 배송중게이트만 다뤘음, JOURNAL.md 6단계 참고) |
 | `escalation_reasoning` | 유지, 의미 재해석 — "사람이 봐야 함"의 근거가 아니라 "이 보상조치/알림을 취한" 근거 기록으로 |
 
 ```python
@@ -287,7 +287,7 @@ class CompensationRecord(TypedDict):
 
 자연재해 즉시분기 / Supervisor `predict_delay_escalation`의 `escalate_now=True`(회복불가로
 재해석) / 재시도 예산 소진(회복가능으로 지켜봤으나 끝내 미해소, 안전장치) — 이 세 경로가
-배송중게이트에서 전부 `compensation` 실행으로 수렴한다. 조립대기게이트도 재시도 예산 소진 시
+배송중게이트에서 전부 `compensation` 실행으로 수렴한다. 포장대기게이트도 재시도 예산 소진 시
 같은 모델로 수렴(`_compensate` 헬퍼 공유). "사람을 기다리는 대기 상태"를 persist하지 않는다는
 설계 의도가 이걸로 완성됨.
 
@@ -311,14 +311,14 @@ class CompensationRecord(TypedDict):
 | 집계 | 패키지조립agent | 조건카운트 | `package_ref`가 없고 Stage1 판정으로 영구 제외되지 않은 item(`_is_assembly_eligible`)을 `delivery_address_id` 기준으로 묶음. 같은 배송지의 미봉인 패키지가 있으면 합류(단 v16 이후에도 여전히 그래프 구조상 dead code — JOURNAL.md 6단계 후속 참고). required/arrived count 체크, 충족시 봉인+tracking_number 발급 |
 | 액션 | 포장agent | 액션 | 포장 완료 처리 (Package 단위 일괄, "포장중" 중간상태는 item 레벨엔 없음) |
 | 판단+반복 | 피킹지연게이트 | self-loop 조건분기 + Stage1 자동판정 | Item 기반. `item_delay_reason` 있는 item만 대상, 해소되면 피킹완료 확정, 미해소면 자기루프. retry_count 초과 시 Stage1 판정(`_ITEM_RECOVERABLE`)으로 즉시 귀결 — 회복불가(파손)면 품목취소, 회복가능(재고부족/검수불량/통관지연)이면 `fulfillment_preference_on_delay`로 부분수령/계속대기 자동 적용 (v16) |
-| 판단+반복 | 조립대기게이트 | self-loop 조건분기 (순수 워처) | 미봉인 Package(`tracking_number is None`) 기반. 스스로 해소하지 않고 감시만 함 — 실제 해소는 피킹지연게이트+패키지조립agent 재봉인으로 일어남. retry_count 초과시 보상조치(환불) 실행 (v16, 舊 escalated=true) |
+| 판단+반복 | 포장대기게이트 | self-loop 조건분기 (순수 워처) | 미봉인 Package(`tracking_number is None`) 기반. 스스로 해소하지 않고 감시만 함 — 실제 해소는 피킹지연게이트+패키지조립agent 재봉인으로 일어남. retry_count 초과시 보상조치(환불) 실행 (v16, 舊 escalated=true) |
 | 판단+반복 | 배송중게이트 | self-loop 조건분기 | 봉인된 Package(`tracking_number` 있음) 기반. `delay_categories` 체크(외부신호/폴링 데모는 고정 매핑), 자연재해는 재시도 없이 즉시 보상조치(환불). 그 외 지연은 매 틱마다 먼저 Supervisor(predict_delay_escalation)에게 회복가능 여부를 묻고(`escalate_now=True`=회복불가로 재해석), 회복불가면 즉시 보상조치, 회복가능이면 재시도하다 retry_count 초과 시 안전장치로 보상조치 (v16, 舊 escalated=true) |
 | 액션 | mock_carrier_signal | 액션 (POC 전용 신호 발생기) | 봉인된 Package를 `포장완료→출고됨→배송중→배송완료` 고정 시퀀스로 전진시키고 GPS placeholder 채움. 실제 서비스에서는 택배사 웹훅/Kafka 이벤트가 이 자리를 대체 |
 | 판단+반복 | 추적agent | self-loop 조건분기 + 파생 재계산 | 신호를 만들지 않고 현재 item_status/delay_categories만 보고 Order 파생값(internal_order_status, customer_facing_status) 재계산, 배송완료 도달 여부 판단 → 도달시 종료, 아니면 mock_carrier_signal로 재진입 |
 | 부가 | 알림agent | 조건부 발송 (비차단) | notification_enabled 확인 후 notification_log에 기록. 워크플로우를 막지 않음 |
 
 **구현 현황**: UserProfile조회 / 주문요청 / 주문검증 / Supervisor(더미) / 창고처리 / 피킹지연게이트 / 패키지조립 /
-포장 / 조립대기게이트 / 배송중게이트 / mock_carrier_signal / 추적agent = 구현됨(`logistics_agent/nodes/`).
+포장 / 포장대기게이트 / 배송중게이트 / mock_carrier_signal / 추적agent = 구현됨(`logistics_agent/nodes/`).
 알림agent = **설계만 있고 코드 없음** (다음 단계).
 
 <a id="removed-integrated"></a>
@@ -334,7 +334,7 @@ class CompensationRecord(TypedDict):
   지연 발생 시점에 반응형으로 담당. 이 필드로 그룹핑을 검증하던 시나리오 9/11도 함께 폐기
   (JOURNAL.md 6단계 참고)
 - ~~PackageState.escalated (bool)~~ → 제거 (v16), `compensation: CompensationRecord | None`으로
-  대체. 조립대기게이트/배송중게이트가 공유하던 필드라 두 게이트 모두 보상조치(환불) 모델로 통합
+  대체. 포장대기게이트/배송중게이트가 공유하던 필드라 두 게이트 모두 보상조치(환불) 모델로 통합
 - ~~Item.escalated (bool)~~ → 제거 (v16), `pending_decision`/`decision_log`로 대체 — 판단(현재
   열린 결정)과 기록(해소된 결정)을 원칙3대로 분리
 
@@ -406,7 +406,7 @@ class CompensationRecord(TypedDict):
 | delay_categories | list[string] | 빈 배열=지연없음. 여러 원인 동시 가능 |
 | policy_version_applied | string/null | 지연 감지 당시 적용 정책 버전 (역추적/감사용) |
 | last_checked_at | timestamp | 모니터링 폴링 기록 |
-| retry_count | int | 지연체크게이트(조립대기게이트/배송중게이트)의 self-loop 진입(폴링) 횟수 |
+| retry_count | int | 지연체크게이트(포장대기게이트/배송중게이트)의 self-loop 진입(폴링) 횟수 |
 | compensation | CompensationRecord/null | v16, 舊 escalated. 보상조치(POC 범위: 환불만) 실행 기록 — 판단이 즉시 액션으로 끝나 persist할 대기 상태가 없어짐. non-null이면 이후 두 게이트 모두 스킵 |
 | escalation_reasoning | string/null | 이 보상조치/알림을 취한 근거 텍스트 — 설명가능성(v16, 의미 재해석). 대부분 Supervisor(predict_delay_escalation)의 판단 근거지만, 자연재해 즉시 보상조치(Supervisor 미개입, 고정 규칙)는 그 사실 자체를 알 수 있는 고정 문자열을 남긴다. 해소/지연없음 전이 시 null로 복귀 |
 | join_waiting_since | timestamp/null | 패키지 조립 무한대기 방지용 타임아웃 기준. **첫 대기 시각 보존** (재진입 시 덮어쓰지 않음), 봉인 시 null로 복귀 |
@@ -478,7 +478,7 @@ class CompensationRecord(TypedDict):
 - `order_item_id`(item_id와 분리된 유닛 식별자) 신설 여부 — 지금은 `order_validation_agent`의
   item_id 중복 검사로 임시 대응 중(발견 경위: JOURNAL.md 참고).
   "동일 상품 복수 주문"이 이 프로젝트의 실제 검증 시나리오가 될 때 다시 열어볼 것
-- 조립대기게이트는 실제 경과시간이 아니라 `retry_count`(self-loop 진입 횟수)를 타임아웃 판단 기준으로 쓴다
+- 포장대기게이트는 실제 경과시간이 아니라 `retry_count`(self-loop 진입 횟수)를 타임아웃 판단 기준으로 쓴다
   — 동기 실행되는 POC 데모에서 벽시계 시간 경과를 재현할 수 없어서 튜닝한 단순화. `join_waiting_since`는
   여전히 최초 대기 시각을 보존하는 기록용 필드로 남아있음 (판단=retry_count / 기록=join_waiting_since, 원칙3).
   실제 서비스라면 폴링 주기 × 경과 tick 또는 진짜 타임스탬프 비교로 대체해야 함
@@ -522,6 +522,22 @@ class CompensationRecord(TypedDict):
   Package 도메인 보상조치에도 재사용(Item 도메인 취소와 같은 라벨로 통일) — 단 이 값은 원래
   "이 상품 자체를 준비할 수 없다"는 Item 도메인 어휘라 의미가 다소 늘어남, (2) "환불됨" 같은 새
   값을 신설해 취소와 명확히 구분. 실제로 문제가 되는 시점(알림agent 구현 등)에 재검토.
+- **배송중게이트의 재시도 라우팅이 주문 전체(order-wide) 단위로 패키지를 블로킹한다.**
+  `route_after_in_transit_gate`가 "이 주문에 속한 패키지 중 하나라도 미해소 지연이 있는가"를
+  기준으로 삼기 때문에(패키지별이 아니라 전체 기준), 지연이 전혀 없는 패키지도 같은 주문의 다른
+  패키지가 해소/보상조치될 때까지 `mock_carrier_signal`로 못 넘어가 실제 배송 진행 자체가
+  시작되지 못한다. 원칙6("각 Package/Item이 준비되는 대로 독립 진행")과 문면상 어긋나는 지점 —
+  JOURNAL.md 4단계 "부가발견 4번"이 방어한 "lockstep은 원칙6 위반이 아니다"는 논의는
+  `mock_carrier_signal ↔ tracking_agent` 순환 **안에서의** 진행 얘기였고, 그 순환에 **들어가는
+  시점 자체**가 다른 패키지의 지연에 막힌다는 건 별개 문제라 그 논의로 커버되지 않는다.
+  **재현 조건**: 한 주문이 배송지 2곳 이상으로 쪼개져 각각 다른 Package로 봉인되고, 그중
+  하나만 `_PACKAGE_DELAY_SIGNAL`에 걸린 경우 — 지금 11개 시나리오 중 이 조합을 실행하는
+  것은 없어(시나리오8은 배송지 2곳이지만 둘 다 지연 없음) 실행으로 드러난 적이 없는 gap이다.
+  **해법 후보 두 가지**: (1) `route_after_in_transit_gate`를 패키지별 판단으로 바꿔 지연 없는
+  패키지는 먼저 `mock_carrier_signal`로 보내고 지연 패키지만 게이트에 남긴다, (2) POC 단순화로
+  그대로 인정하고 여기 기록만 해둔다. 다음 세션에서 위 재현 조건으로 실측한 뒤 결정할 것 —
+  **`in_transit_delay_gate`의 이름/구조(예: tracking_agent와의 역할 재검토) 논의도 이 실측
+  결과가 나올 때까지 보류한다.**
 
 <a id="dead-fields"></a>
 ## 미구현/죽은 필드 종합
@@ -560,6 +576,18 @@ class CompensationRecord(TypedDict):
 - Package 보상조치의 재발송 옵션 (`CompensationRecord.action`은 POC 범위상 "환불"만 구현) —
   재발송은 fulfillment 재진입(창고처리 단계부터 다시 태우는 것)이 필요해 그래프 재진입성
   과제와 맞물림
+- **Package 보상조치의 심각도별 세분화 (쿠폰지급/사과알림/환불 등).** 지금은 `compensation`
+  확정 시 액션이 항상 "환불" 하나뿐인데, 실제 커머스 정책이라면 지연 심각도에 따라 다른 조치가
+  나가는 게 더 현실적이다. **재발송(위 항목)과는 다른 축이다** — 재발송이 fulfillment 재진입을
+  요구해 범위 밖으로 뺀 것과 달리, 쿠폰지급/사과알림은 재발송처럼 fulfillment를 다시 태울 필요
+  없이 그 자리에서 끝나는 1회성 액션이라 재진입성 미구현이 이들을 막는 이유가 되지 못한다.
+  즉 "환불만" 결정(JOURNAL.md 6단계, 재발송 vs 환불 축)이 이 축까지 검토하고 기각한 게 아니라
+  **아직 검토된 적 없는 별도 질문**이다. 타입 장벽도 없다 — `CompensationRecord.action`은
+  `Literal["환불"]`이 아니라 `str`이라 스키마 변경 없이 값만 늘릴 수 있다. 다만 구현하려면
+  **"심각도"를 누가 판단하는가**부터 정해야 한다 — 지금 `in_transit_delay_gate`가 Supervisor에게
+  묻는 건 "회복가능/불가"뿐이라, 세분화하려면 회복불가로 판정된 안에서 심각도를 또 나누는 새
+  판단 축이 필요하다(`predict_delay_escalation` 출력 확장 또는 별도 규칙표). 판단 주체가
+  정해지기 전에는 액션 종류만 늘려봐야 무엇을 기준으로 고를지가 없어 구현 착수 대상이 아니다.
 - 사용자 endpoint "도킹" 개념 (사이트별 프로필 스키마를 표준 캡슐로 변환하는 어댑터) — 현재 기술로 완전 표준화 어려움, 개념만 남김
 - `_is_valid_address`는 필드가 채워졌는지(형식)만 검사하고, 실제 존재하는 주소인지(우편번호 유효성,
   도로명주소 실존 여부)는 검증하지 않는다. 실제 서비스라면 이 지점에 외부 주소 검증 API(우체국

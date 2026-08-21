@@ -99,7 +99,7 @@ class NotificationEntry(TypedDict):
 
 class CompensationRecord(TypedDict):
     """v16: PackageState.escalated(bool)를 대체 — 판단이 즉시 액션으로 끝나 persist할 대기
-    상태가 없어졌다(조립대기게이트/배송중게이트 공통). POC 범위상 action은 항상 "환불"."""
+    상태가 없어졌다(포장대기게이트/배송중게이트 공통). POC 범위상 action은 항상 "환불"."""
 
     action: str  # POC 범위: "환불"만 (재발송은 확장 지점)
     executed_at: str

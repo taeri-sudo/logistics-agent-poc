@@ -241,7 +241,7 @@ def run_demo() -> None:
             "confirmed_order_items": [
                 {
                     # 통관지연 + 계속대기희망 → Stage1이 그룹핑에서 제외하지 않고 계속 대기시킴 →
-                    # 이 배송지엔 이 item뿐이라 패키지가 영원히 미봉인 → 조립대기게이트 자체 재시도
+                    # 이 배송지엔 이 item뿐이라 패키지가 영원히 미봉인 → 포장대기게이트 자체 재시도
                     # 예산(MAX_GATE_RETRIES)도 소진 → 보상조치(환불)로 귀결
                     "item_id": "SKU-701",
                     "delivery_address_id": "ADDR-OFFICE",

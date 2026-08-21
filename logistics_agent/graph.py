@@ -1,5 +1,5 @@
 """LangGraph 최소 골격 — UserProfile → 주문요청 → 검증 → decide_warehouse_entry → 창고처리
-→ 피킹지연게이트 → 패키지조립 → 포장 → 조립대기게이트 → 배송중게이트 → mock_carrier_signal → 추적."""
+→ 피킹지연게이트 → 패키지조립 → 포장 → 포장대기게이트 → 배송중게이트 → mock_carrier_signal → 추적."""
 
 from __future__ import annotations
 
@@ -7,11 +7,11 @@ from langgraph.graph import END, START, StateGraph
 
 from logistics_agent.nodes.assembly import package_assembly_agent
 from logistics_agent.nodes.delay_gates import (
-    assembly_wait_gate,
     in_transit_delay_gate,
+    packaging_wait_gate,
     picking_delay_gate,
-    route_after_assembly_wait_gate,
     route_after_in_transit_gate,
+    route_after_packaging_wait_gate,
     route_after_picking_gate,
 )
 from logistics_agent.nodes.entry import order_request_agent, user_profile_lookup
@@ -34,7 +34,7 @@ def build_graph():
     graph.add_node("picking_delay_gate", picking_delay_gate)
     graph.add_node("package_assembly_agent", package_assembly_agent)
     graph.add_node("packaging_agent", packaging_agent)
-    graph.add_node("assembly_wait_gate", assembly_wait_gate)
+    graph.add_node("packaging_wait_gate", packaging_wait_gate)
     graph.add_node("in_transit_delay_gate", in_transit_delay_gate)
     graph.add_node("mock_carrier_signal", mock_carrier_signal)
     graph.add_node("tracking_agent", tracking_agent)
@@ -55,11 +55,11 @@ def build_graph():
         {"retry": "picking_delay_gate", "proceed": "package_assembly_agent"},
     )
     graph.add_edge("package_assembly_agent", "packaging_agent")
-    graph.add_edge("packaging_agent", "assembly_wait_gate")
+    graph.add_edge("packaging_agent", "packaging_wait_gate")
     graph.add_conditional_edges(
-        "assembly_wait_gate",
-        route_after_assembly_wait_gate,
-        {"retry": "assembly_wait_gate", "proceed": "in_transit_delay_gate"},
+        "packaging_wait_gate",
+        route_after_packaging_wait_gate,
+        {"retry": "packaging_wait_gate", "proceed": "in_transit_delay_gate"},
     )
     graph.add_conditional_edges(
         "in_transit_delay_gate",

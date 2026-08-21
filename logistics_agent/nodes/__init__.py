@@ -1,7 +1,7 @@
 from logistics_agent.nodes.assembly import package_assembly_agent
 from logistics_agent.nodes.delay_gates import (
-    assembly_wait_gate,
     in_transit_delay_gate,
+    packaging_wait_gate,
     picking_delay_gate,
 )
 from logistics_agent.nodes.entry import order_request_agent, user_profile_lookup
@@ -20,7 +20,7 @@ __all__ = [
     "picking_delay_gate",
     "package_assembly_agent",
     "packaging_agent",
-    "assembly_wait_gate",
+    "packaging_wait_gate",
     "in_transit_delay_gate",
     "mock_carrier_signal",
     "tracking_agent",
