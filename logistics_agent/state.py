@@ -46,7 +46,7 @@ class GpsPoint(TypedDict):
 
 class UserProfile(TypedDict):
     user_id: str
-    delivery_addresses: list[Address]  # 주소록. [0]이 기본배송지
+    delivery_addresses: list[Address]  # 주소록
     payment_method: PaymentMethod
     notification_enabled: bool
 

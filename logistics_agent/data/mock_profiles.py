@@ -5,7 +5,6 @@ from logistics_agent.state import UserProfile
 MOCK_USER_PROFILES: dict[str, UserProfile] = {
     "user-001": {
         "user_id": "user-001",
-        # 주소록. [0]이 기본배송지
         "delivery_addresses": [
             {
                 "address_id": "ADDR-HOME",

@@ -12,10 +12,12 @@ def run_demo() -> None:
     base_items = [
         {
             "item_id": "SKU-001",
+            "delivery_address_id": "ADDR-HOME",
             "location": {"zone": "A", "shelf": "12", "bin": "04"},
         },
         {
             "item_id": "SKU-002",
+            "delivery_address_id": "ADDR-HOME",
             "location": {"zone": "B", "shelf": "03", "bin": "01"},
         },
     ]
@@ -308,6 +310,29 @@ def run_demo() -> None:
         }
     )
     _print_result(result_partial_block)
+
+    print()
+    print("=" * 60)
+    print("시나리오 13: 배송지 미지정 item → 주문검증agent가 거부해야 함")
+    print("=" * 60)
+    result_no_address = app.invoke(
+        {
+            "user_id": "user-001",
+            "confirmed_order_items": [
+                {
+                    # delivery_address_id도 delivery_address도 없음. 예전엔 entry.py가 조용히
+                    # 주소록[0]("ADDR-HOME")으로 채워 검증을 통과시켰지만(fallback 제거 전),
+                    # 실제 체크아웃 UX라면 주문 확정 시점에 배송지가 이미 선택돼 있어야 하므로
+                    # 이런 item은 존재할 수 없는 입력이다 — 지금은 주소가 빈 채로 넘어가
+                    # 주문검증agent가 걸러내야 한다
+                    "item_id": "SKU-901",
+                    "location": {"zone": "A", "shelf": "01", "bin": "01"},
+                },
+            ],
+            "payment_status_hint": "완료",
+        }
+    )
+    _print_result(result_no_address)
 
 
 def _print_result(state: dict) -> None:

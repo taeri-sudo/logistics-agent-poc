@@ -70,6 +70,26 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
   12)로 실측 확인 후 "패키지별 개별 판단"으로 구현. `in_transit_delay_gate`/`mock_carrier_signal`/
   추적agent를 하나의 통합 self-loop로 재구성하고, `mock_carrier_signal`이 미해소 지연 패키지를
   스스로 건너뛰도록 함 — 상세는 "검토 후 현재 구조 유지로 확정" 절 참고
+- [x] 6단계 후속: `entry.py`의 "주소록[0] 기본배송지" fallback 제거 — 코드 리뷰 중
+  `_resolve_item_addresses`가 `delivery_address_id`도 `delivery_address`도 없는 item을 조용히
+  주소록[0](`profile_addresses[0]`)으로 채워주고 있는 걸 발견. 실제 체크아웃 UX라면 "확정된
+  주문인데 배송지가 아예 없는 item"이라는 입력 자체가 존재할 수 없는데(이 프로젝트는 "확정된
+  주문내역부터 시작"을 전제로 한다 — "재고부족 개념의 세 가지 층위" 절 참고), fallback이 그
+  존재할 수 없는 입력을 조용히 유효하게 만들어주고 있었다. 게다가 `order_validation_agent`는
+  item의 `delivery_address_id`가 알려진 주소를 가리키는지만 검사하므로([validation.py:41](logistics_agent/nodes/validation.py#L41)),
+  fallback이 미리 주소를 채워버리면 검증agent가 "배송지 미지정"이라는, 원래 걸러낼 수 있었던
+  케이스 자체를 볼 기회가 없었다 — 단순 데모 편의가 아니라 검증 지점 하나를 구조적으로 가리고
+  있던 셈. main.py 12개 시나리오 전수 조사 결과 시나리오 1·2(둘 다 `base_items`)만 이 fallback에
+  의존했고 나머지는 전부 배송지를 명시하고 있었다(실측 확인: 시나리오 1 실행 시
+  `배송지=['ADDR-HOME']`로 로그 출력됨).
+  **수정**: `_resolve_item_addresses`(entry.py)에서 `default_id` fallback 분기 제거 — 배송지가
+  없는 item은 이제 `delivery_address_id=""`로 남아 관문 노드가 걸러낸다(주소록에 없는 id를
+  이미 같은 방식으로 처리하던 기존 경로 재사용, 새 분기 안 만듦). `state.py`/`mock_profiles.py`의
+  "[0]이 기본배송지" 주석도 더 이상 어떤 코드도 참조하지 않는 죽은 설명이라 함께 제거. 시나리오
+  1·2는 `delivery_address_id="ADDR-HOME"`을 명시하도록 고쳐 기존 동작을 그대로 유지시켰고,
+  시나리오 13(신설)으로 "배송지 미지정 item → 주문검증agent가 거부"를 실제로 검증했다(실측:
+  `validation_passed=false`, `delivery_addresses 비어 있음` + `SKU-901: delivery_address_id= 참조
+  불가` 두 에러 동시 발생). main.py 13개 시나리오 전체 회귀 실행 + pyright 확인 완료, 모두 정상.
 
 상세 실행 기록·시나리오 검증·gap 발견 과정은 전부 [JOURNAL.md](JOURNAL.md) 참고.
 
@@ -448,7 +468,7 @@ class CompensationRecord(TypedDict):
 | 필드 | 타입 | 비고 |
 |---|---|---|
 | user_id | string | |
-| delivery_addresses | list[Address] | 주소록. [0]이 기본배송지 |
+| delivery_addresses | list[Address] | 주소록 |
 | payment_method | PaymentMethod | 아래 참고 |
 | notification_enabled | bool | Order 생성 시 이 값을 복사해 옴 |
 
@@ -524,6 +544,22 @@ class CompensationRecord(TypedDict):
   (판단 없음, Agent 아님 — 단순 조회)를 추가하고, 진짜 Supervisor(예측/판단 영역)는 그 조회
   결과에서 이상 신호가 발견될 때만 개입하도록 나눈다. `predict_delay_escalation`이 이미
   "이상 신호가 있을 때만 LLM 개입"이라는 같은 패턴을 배송중게이트에서 쓰고 있어 선례로 참고할 수 있다.
+- **`decide_warehouse_entry`→`warehouse_processing_agent`가 무조건 edge라, Supervisor가 어떤
+  값을 반환하든 그래프 흐름에 영향을 주지 못한다** ([graph.py:54](logistics_agent/graph.py#L54)).
+  위 항목("온톨로지 조회조차 없는 완전한 pass-through")보다 더 근본적인 제약이다 — 지금처럼
+  조건분기 자체가 없으면, 나중에 LLM을 붙여 진짜 판단을 하게 되더라도 그 결과를 반영할 곳이
+  없다. "아직 LLM 미연동"이 아니라 "연동해도 쓸 데가 없는" 구조적 제약이라는 뜻.
+
+  **확장 방향**: `predict_delay_escalation`이 이미 검증한 패턴(구조화된 출력으로 LLM 응답을
+  제한된 값으로 강제)을 재사용한다. 예: `WarehouseEntryDecision(action:
+  Literal["proceed", "escalate_to_operator"], reasoning: str)` 형태의 pydantic 모델을 정의하고,
+  `decide_warehouse_entry → warehouse_processing_agent` edge를 `add_conditional_edges`로 바꿔
+  이 제한된 `action` 값에 따라 분기한다.
+
+  "모든 LLM 응답 경우의 수를 미리 그래프로 만들 수 없다"는 딜레마는, 판단 근거(`reasoning`)는
+  자유 텍스트로 두고 최종 결정(`action`)만 유한한 enum으로 좁히는 방식으로 해결한다 —
+  `predict_delay_escalation`의 `SupervisorPrediction`(`escalate_now: bool` + `reasoning: str`)이
+  이미 같은 구조를 쓰고 있다.
 - 피킹지연게이트가 여전히 창고처리agent 대신 item_status를 직접 확정한다 — 창고처리agent
   재진입성 리팩터는 의도적으로 보류 중, 다음 단계 후보
 - 알림agent 미착수 — notification_enabled 필드는 이미 있음 (아래 "미구현/죽은 필드 종합" 참고)
@@ -626,5 +662,5 @@ class CompensationRecord(TypedDict):
 
 <a id="production-notes"></a>
 ## 실무 전환 시 고려사항
-- `main.py`의 데모 시나리오 12개는 POC 검증용이다. 실제 서비스화 시 `main.py`(순수 진입점)와
+- `main.py`의 데모 시나리오 13개는 POC 검증용이다. 실제 서비스화 시 `main.py`(순수 진입점)와
   `tests/`(시나리오 이관, pytest 등 정식 프레임워크로) 분리가 필요하다.

@@ -31,11 +31,13 @@ def _resolve_item_addresses(
 ) -> tuple[list[str], list[Address]]:
     """item별 delivery_address_id를 해석하고, 실제 참조된 주소만 최초 참조 순서로 모아 반환.
 
-    우선순위: delivery_address_id(주소록 참조) > delivery_address(주문 시점 신규주소) > 주소록[0].
-    주소록에 없는 id는 crash시키지 않고 그대로 남긴다 — 관문 노드(주문검증agent)가 걸러낸다.
+    우선순위: delivery_address_id(주소록 참조) > delivery_address(주문 시점 신규주소). 실제
+    체크아웃 UX라면 주문 확정 시점에 배송지가 이미 선택돼 있어야 하므로, 둘 다 없는 item에
+    "주소록[0]"을 조용히 채워주는 fallback을 두지 않는다 — 그런 item은 주소가 비어 있는 채로
+    그대로 남긴다. 주소록에 없는 id도 마찬가지로 crash시키지 않고 그대로 남긴다.
+    두 경우 다 관문 노드(주문검증agent)가 걸러낸다.
     """
     book = {addr["address_id"]: addr for addr in profile_addresses}
-    default_id = profile_addresses[0]["address_id"] if profile_addresses else ""
     inline_ids: dict[tuple[str, str], str] = {}  # (postal_code, address_line) → 부여한 id
     used: dict[str, Address] = {}  # dict 삽입순서 = 최초 참조 순서
 
@@ -57,9 +59,7 @@ def _resolve_item_addresses(
                 inline_ids[key] = addr_id
                 used.setdefault(addr_id, cast(Address, {**inline, "address_id": addr_id}))
         else:
-            addr_id = default_id
-            if default_id in book:
-                used.setdefault(default_id, book[default_id])
+            addr_id = ""
 
         address_ids.append(addr_id)
 
