@@ -28,6 +28,8 @@ def order_validation_agent(state: GraphState) -> GraphState:
         errors.append(f"payment_status={order['payment_status']} (완료 필요)")
 
     delivery_addresses = order["delivery_addresses"]
+    # 아래 순회 기반 검사(_is_valid_address)는 리스트가 비어 있으면 순회 자체가 안 일어나
+    # 아무것도 못 잡는다 — 이 검사가 그 구멍을 메운다.
     if not delivery_addresses:
         errors.append("delivery_addresses 비어 있음")
 
@@ -35,7 +37,8 @@ def order_validation_agent(state: GraphState) -> GraphState:
         if not _is_valid_address(address):
             errors.append(f"{address.get('address_id')}: delivery_address 필수 필드 누락")
 
-    # item의 배송지 참조가 실제로 해석됐는지 (주소록에 없는 id는 여기서 걸린다)
+    # item이 가리키는 delivery_address_id가 실제로 존재하는 주소인지 확인 (참조 무결성 검증 —
+    # DB라면 외래키 제약이 자동으로 하는 것을, DB 없는 이 구조에서는 코드로 대신 검증함)
     known_ids = {address["address_id"] for address in delivery_addresses}
     for item in order["item_list"]:
         if item["delivery_address_id"] not in known_ids:
