@@ -59,10 +59,10 @@ order-wide로 막던 gap을 고치며 이렇게 재구성했습니다 — 이전
 | `order_validation_agent` | 관문 · 조건분기 | `payment_status`, 배송지 검증 → 통과/실패 |
 | `decide_warehouse_entry` | 판단 (Supervisor) | 창고처리 진입 여부 판단(`decision_type=proceed_to_warehouse`). 예외가 없으면 규칙만으로 결정되는 판단이라 아직 더미(고정 판단) |
 | `warehouse_processing_agent` | 반복 (내장 루프) | `item_list` 순회, Sensor(위치확인)→Action(피킹). `item_delay_reason`이 있는 item은 피킹만 스킵하고 그대로 넘김 |
-| `picking_delay_gate` | 판단+반복 · self-loop | Item 기반. `item_delay_reason` 있는 item만 대상으로 해소 여부 재확인, self-loop. 재시도 예산 소진 시 Stage1 자동판정(회복불가→품목취소, 회복가능→선호도 기반 부분수령/합배송 자동 적용) |
+| `picking_delay_gate` | 판단+반복 · self-loop | Item 기반. `item_delay_reason` 있는 item만 대상으로 해소 여부 재확인, self-loop. 재시도 한도 소진 시 Stage1 자동판정(회복불가→품목취소, 회복가능→선호도 기반 부분수령/합배송 자동 적용) |
 | `package_assembly_agent` | 집계 · 조건카운트 | 미배정 item을 배송지별 Package로 묶고, `required==arrived`면 봉인+`tracking_number` 발급 |
 | `packaging_agent` | 액션 | 봉인된 Package 소속의 피킹완료 item을 일괄 포장완료로 전이 |
-| `packaging_wait_gate` | 판단+반복 · self-loop (순수 워처) | 미봉인 Package(`tracking_number is None`) 감시만 함, 스스로 해소하지 않음. 재시도 예산 소진 시 보상조치(환불) |
+| `packaging_wait_gate` | 판단+반복 · self-loop (순수 워처) | 미봉인 Package(`tracking_number is None`) 감시만 함, 스스로 해소하지 않음. 재시도 한도 소진 시 보상조치(환불) |
 | `in_transit_delay_gate` | 판단+반복 · 통합 루프(위 참고) | 봉인된 Package의 `delay_categories` 체크. 자연재해는 즉시 보상조치, 그 외엔 매 틱 Supervisor(`predict_delay_escalation`, Gemini 실제 호출)에게 회복가능 여부를 먼저 묻고 판단. `mock_carrier_signal`/`tracking_agent`와 무조건 edge로 묶여 배송 시작 전 1회가 아니라 배송 진행 중에도 매 틱 재호출됨 |
 | `mock_carrier_signal` | 액션 (POC 전용 신호 발생기) | 봉인된 Package 중 **미해소 지연(`delay_categories` 있고 `compensation` 없음)이 없는 것만** `포장완료→출고됨→배송중→배송완료` 고정 시퀀스로 전진, GPS placeholder 채움. 지연 중인 패키지는 건너뛰어 같은 주문의 다른 패키지를 막지 않음(원칙6). 실제 서비스라면 택배사 웹훅/Kafka 이벤트가 이 자리를 대체 |
 | `tracking_agent` | 판단+반복 · 파생 재계산 | 신호를 만들지 않고 현재 `item_status`/`delay_categories`만 보고 Order 파생값(`internal_order_status`, `customer_facing_status`) 재계산. `route_after_in_transit_cycle`이 "미배송 item이 있는가"와 "미해소 지연 패키지가 있는가"를 함께 판단해 → 있으면 `in_transit_delay_gate`로 재진입, 둘 다 없으면 종료 |

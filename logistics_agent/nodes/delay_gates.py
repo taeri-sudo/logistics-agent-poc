@@ -1,8 +1,8 @@
 """판단+반복 노드: 지연체크게이트 3종 — 피킹지연(Item)/조립대기(미봉인 Package)/배송중(봉인 Package).
 
-셋 다 같은 뼈대: 조건 미해소면 자기 자신으로 self-loop. Item(피킹지연게이트)은 재시도 예산을
+셋 다 같은 뼈대: 조건 미해소면 자기 자신으로 self-loop. Item(피킹지연게이트)은 재시도 한도를
 넘기면 Stage1 판정(회복불가→품목취소 / 회복가능→선호도 자동적용)으로 즉시 귀결되고,
-Package(포장대기게이트/배송중게이트)는 재시도 예산을 넘기거나 회복불가로 분류되면 보상조치
+Package(포장대기게이트/배송중게이트)는 재시도 한도를 넘기거나 회복불가로 분류되면 보상조치
 (환불) 실행으로 즉시 귀결된다 — 어느 쪽도 "escalated"로 표시만 해두고 사람을 기다리는 대기
 상태를 persist하지 않는다(v16 재설계, DESIGN.md "사람 개입 워크플로우" 참고).
 """
@@ -68,7 +68,7 @@ def _lookup_package_delay_signal(pkg: PackageState) -> tuple[list[str], int | No
 def picking_delay_gate(state: GraphState) -> GraphState:
     """피킹지연게이트: item_delay_reason이 있는 item만 대상으로 해소 여부 재확인.
 
-    재시도 예산을 넘기면 Stage1 판정을 같은 tick 안에서 자동으로 끝낸다 — 회복불가면
+    재시도 한도를 넘기면 Stage1 판정을 같은 tick 안에서 자동으로 끝낸다 — 회복불가면
     품목취소, 회복가능이면 fulfillment_preference_on_delay를 참조해 부분수령/합배송을
     자동 적용한다. 진짜 사람이 개입하는 별도 진입점은 아직 없어(경로B 미구현) 이 판정은
     항상 즉시 자동 해소된다 — pending_decision은 그 미래를 위한 스키마 자리일 뿐이다.
@@ -189,7 +189,7 @@ def packaging_wait_gate(state: GraphState) -> GraphState:
 
     실제 해소는 피킹지연게이트가 item_delay_reason을 풀고 패키지조립agent가 재봉인하는
     경로로만 일어난다 — 이 게이트에 진입했을 때 이미 봉인돼 있으면 그대로 통과. 재시도
-    예산이 소진되면(전형적으로 "합배송희망"으로 결정된 item을 영원히 기다리다 끝내
+    한도가 소진되면(전형적으로 "합배송희망"으로 결정된 item을 영원히 기다리다 끝내
     실패한 경우) 더 이상 기다리지 않고 보상조치(환불)로 귀결한다.
     """
     packages: list[PackageState] = list(state.get("packages", []))
@@ -202,7 +202,7 @@ def packaging_wait_gate(state: GraphState) -> GraphState:
         new_retry = pkg["retry_count"] + 1
         if new_retry > MAX_GATE_RETRIES:
             packages[pos] = _compensate(
-                pkg, f"재시도 예산 소진(retry_count={new_retry}) - 미봉인 상태 지속으로 보상조치", now
+                pkg, f"재시도 한도 소진(retry_count={new_retry}) - 미봉인 상태 지속으로 보상조치", now
             )
             print(f"  [보상조치] {pkg['package_id']} 미봉인 retry_count={new_retry} → 환불")
         else:
@@ -213,12 +213,12 @@ def packaging_wait_gate(state: GraphState) -> GraphState:
             print(f"  [재시도] {pkg['package_id']} 미봉인 retry_count={new_retry}")
 
     waiting = sum(1 for p in packages if p["tracking_number"] is None and p["compensation"] is None)
-    print(f"[포장대기게이트] 완료 - 대기중(재시도 예산 남음) {waiting}개")
+    print(f"[포장대기게이트] 완료 - 대기중(재시도 한도 남음) {waiting}개")
     return {"packages": packages}
 
 
 def route_after_packaging_wait_gate(state: GraphState) -> str:
-    """조건분기: 재시도 예산이 남은 미봉인 패키지가 있으면 재시도."""
+    """조건분기: 재시도 한도가 남은 미봉인 패키지가 있으면 재시도."""
     pending = any(
         pkg["tracking_number"] is None and pkg["compensation"] is None
         for pkg in state.get("packages", [])
@@ -232,7 +232,7 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
     자연재해는 재시도 없이 즉시 보상조치(환불). 그 외 지연은 매 틱마다 Supervisor에게
     회복가능 여부를 먼저 물어보고(predict_delay_escalation, escalate_now=True를 "회복불가"로
     재해석), 회복불가로 나오면 즉시 보상조치. 회복가능(escalate_now=False)이면 기존 재시도
-    예산으로 지켜보다가, 예산까지 소진되면(끝내 해소 안 됨) 안전장치로 보상조치에 수렴한다 —
+    한도로 지켜보다가, 한도까지 소진되면(끝내 해소 안 됨) 안전장치로 보상조치에 수렴한다 —
     사람을 기다리는 "escalated" 대기 상태를 persist하지 않는다.
 
     舊 구조에서는 배송 시작 전 한 번만 호출됐지만, order-wide 블로킹 gap 수정(DESIGN.md 참고)
@@ -240,7 +240,7 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
     재호출된다. `_lookup_package_delay_signal`은 item_id 기반 고정 매핑이라 이미 해소된 패키지를
     다시 봐도 똑같은 신호를 돌려주는데, "이미 해소됨"과 "아직 한 번도 안 봄"을 구분할 안전한
     필드가 없다(`retry_count`/`policy_version_applied` 모두 포장대기게이트와 공유돼 재사용
-    불가 — 시도했다가 첫 방문까지 걷어차는 버그로 확인). 그래서 해소 분기는 재실행돼도
+    불가 — 시도했다가 첫 방문까지 이미 처리된 것으로 오판하는 버그로 확인). 그래서 해소 분기는 재실행돼도
     `delay_categories`를 다시 []로 세팅할 뿐이라 멱등하고, 로그만 재실행 시 `was_active`로
     걸러 첫 해소 순간에만 찍는다(아래 참고).
     """
@@ -317,7 +317,7 @@ def in_transit_delay_gate(state: GraphState) -> GraphState:
         if new_retry > MAX_GATE_RETRIES:
             packages[pos] = _compensate(
                 cast(PackageState, {**pkg, "delay_categories": categories}),
-                f"재시도 예산 소진(retry_count={new_retry}), 회복가능으로 지켜봤으나 끝내 미해소 - 보상조치",
+                f"재시도 한도 소진(retry_count={new_retry}), 회복가능으로 지켜봤으나 끝내 미해소 - 보상조치",
                 now,
             )
             print(f"  [보상조치] {pkg['package_id']} {categories} retry_count={new_retry} → 환불")

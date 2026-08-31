@@ -57,7 +57,7 @@ def _find_item(item_list: list[Item], order_id: str, ref: SourceItemRef) -> Item
         return None
     # item_id 하나로만 매칭 — 주문 내 item_id 유일성은 order_validation_agent가 관문에서
     # 보장한다(중복이면 검증 실패로 여기까지 못 옴). 검증agent가 없었다면 next()가 항상 첫 매칭만
-    # 반환해 서로 다른 item이 뒤섞인다(실측 확인: DESIGN.md "item_id 중복" 항목 참고).
+    # 반환해 서로 다른 item이 혼동된다(실측 확인: DESIGN.md "item_id 중복" 항목 참고).
     return next((item for item in item_list if item["item_id"] == ref["item_id"]), None)
 
 

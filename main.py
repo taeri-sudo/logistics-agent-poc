@@ -244,7 +244,7 @@ def run_demo() -> None:
                 {
                     # 통관지연 + 합배송희망 → Stage1이 그룹핑에서 제외하지 않고 계속 대기시킴 →
                     # 이 배송지엔 이 item뿐이라 패키지가 영원히 미봉인 → 포장대기게이트 자체 재시도
-                    # 예산(MAX_GATE_RETRIES)도 소진 → 보상조치(환불)로 귀결
+                    # 한도(MAX_GATE_RETRIES)도 소진 → 보상조치(환불)로 귀결
                     "item_id": "SKU-701",
                     "delivery_address_id": "ADDR-OFFICE",
                     "item_delay_reason": "통관지연",
@@ -270,7 +270,7 @@ def run_demo() -> None:
             "confirmed_order_items": [
                 {
                     # ADDR-OFFICE는 교통지연(resolve_at=1)이라 고정 카운터만 보면 재시도 1번이면
-                    # 곧 해소될 상황. 하지만 order_created_at을 10일 전으로 못박아서 Supervisor에게
+                    # 곧 해소될 상황. 하지만 order_created_at을 10일 전으로 고정해서 Supervisor에게
                     # "이 주문 자체가 이미 오래 묶여있다"는 맥락을 줌 — retry_count=0인 첫 틱에서
                     # Supervisor가 그래도 조기 에스컬레이션할지가 대조 포인트
                     "item_id": "SKU-401",

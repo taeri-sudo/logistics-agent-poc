@@ -210,7 +210,7 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
    "확장 지점" 참고).
 
 세 층위를 하나의 "재고부족" 필드/노드로 뭉뚱그리지 않고 분리해서 본 것이 핵심 — 층위2에
-Supervisor 판단을 억지로 끼워 넣거나, 층위3(예측)을 이 워크플로우 안에 노드로 만들려는
+Supervisor 판단을 무리하게 끼워 넣거나, 층위3(예측)을 이 워크플로우 안에 노드로 만들려는
 시도는 둘 다 잘못된 방향이었을 것.
 
 ---
@@ -241,7 +241,7 @@ Package 보상조치)/`assembly.py`(그룹핑 제외)/`tracking.py`(파생값)/`
 
 **Item 도메인 (피킹지연게이트) 재설계.**
 - `OrderState.fulfillment_preference_on_delay: "부분수령희망"|"합배송희망"|None` 신설.
-  `split_delivery_preference`와 다른 개념 — 그건 "확정 지시"(사전에 포장 방식을 못박음)였지만
+  `split_delivery_preference`와 다른 개념 — 그건 "확정 지시"(사전에 포장 방식을 고정함)였지만
   이건 **"미래 대비 선호도"**(문제가 실제로 생겼을 때만 참조됨)다. 주문 시점에 사전등록.
 - Stage1(운영자, 항상 최초, 경로B — 실제 사람. 창고 실물 상태는 시스템이 갖지 못한 정보라
   LLM으로 대체하지 않는다):
@@ -281,7 +281,7 @@ Package 보상조치)/`assembly.py`(그룹핑 제외)/`tracking.py`(파생값)/`
 | 필드 | 변경 |
 |---|---|
 | ~~escalated: bool~~ | `pending_decision: PendingDecision \| None`로 대체 |
-| (신설) | `decision_log: list[ResolvedDecision]` — 원칙3(판단/기록 분리): `pending_decision`은 현재 열린 결정, `decision_log`는 해소된 결정의 기록. **이 POC 패스에서는 Stage1 판정이 재시도 예산 소진과 같은 tick에서 즉시 자동 해소되므로 `pending_decision`이 실제로 non-None으로 관측되는 경우가 없다** — "미구현/죽은 필드" 참고 |
+| (신설) | `decision_log: list[ResolvedDecision]` — 원칙3(판단/기록 분리): `pending_decision`은 현재 열린 결정, `decision_log`는 해소된 결정의 기록. **이 POC 패스에서는 Stage1 판정이 재시도 한도 소진과 같은 tick에서 즉시 자동 해소되므로 `pending_decision`이 실제로 non-None으로 관측되는 경우가 없다** — "미구현/죽은 필드" 참고 |
 | `item_status` | 값 추가 — "취소됨" |
 | `customer_facing_status` | 값 추가 — "상품준비불가" |
 | `item_delay_reason` | 필드 변경 없음, 취소 확정 후에도 null로 안 되돌림(취소 사유 기록으로 유지) |
@@ -299,7 +299,7 @@ class ResolvedDecision(TypedDict):
     reasoning: str
 ```
 
-Stage1 판정(`delay_gates.py`의 `picking_delay_gate`)은 재시도 예산(`MAX_GATE_RETRIES`) 소진
+Stage1 판정(`delay_gates.py`의 `picking_delay_gate`)은 재시도 한도(`MAX_GATE_RETRIES`) 소진
 시점에 `_ITEM_RECOVERABLE`(회복가능 여부, `resolve_at`과 분리된 별도 매핑)을 먼저 보고:
 회복불가(파손)면 즉시 품목취소, 회복가능(재고부족/검수불량/통관지연)이면
 `fulfillment_preference_on_delay`를 참조해 부분수령/합배송을 자동 적용한다. 부분수령으로
@@ -319,8 +319,8 @@ class CompensationRecord(TypedDict):
 ```
 
 자연재해 즉시분기 / Supervisor `predict_delay_escalation`의 `escalate_now=True`(회복불가로
-재해석) / 재시도 예산 소진(회복가능으로 지켜봤으나 끝내 미해소, 안전장치) — 이 세 경로가
-배송중게이트에서 전부 `compensation` 실행으로 수렴한다. 포장대기게이트도 재시도 예산 소진 시
+재해석) / 재시도 한도 소진(회복가능으로 지켜봤으나 끝내 미해소, 안전장치) — 이 세 경로가
+배송중게이트에서 전부 `compensation` 실행으로 수렴한다. 포장대기게이트도 재시도 한도 소진 시
 같은 모델로 수렴(`_compensate` 헬퍼 공유). "사람을 기다리는 대기 상태"를 persist하지 않는다는
 설계 의도가 이걸로 완성됨.
 
@@ -513,7 +513,7 @@ class CompensationRecord(TypedDict):
 - **배송중게이트 order-wide 블로킹 gap — 패키지별 개별 판단으로 수정 완료 (해결됨).**
   舊 `route_after_in_transit_gate`가 "주문에 속한 패키지 중 하나라도 미해소 지연이 있는가"를
   기준으로 삼아, 지연이 전혀 없는 패키지도 같은 주문의 다른 패키지가 해소될 때까지
-  `mock_carrier_signal`로 못 넘어가던 gap. 재현 시나리오(main.py 시나리오 12 — 배송지 2곳,
+  `mock_carrier_signal`로 진행하지 못하던 gap. 재현 시나리오(main.py 시나리오 12 — 배송지 2곳,
   한쪽만 `_PACKAGE_DELAY_SIGNAL` 지연)로 실측 확인 후, "패키지별 개별 판단" 방향으로 수정:
   1. `in_transit_delay_gate`/`mock_carrier_signal`/`추적agent`를 무조건 edge로 묶어 하나의
      통합 self-loop로 재구성(`route_after_in_transit_cycle`이 종료 조건 통합 판단, 舊
@@ -643,7 +643,7 @@ class CompensationRecord(TypedDict):
    LangSmith 같은 관측성 연동이 없어서 "쓰기만 하고 아무도 안 읽는" 상태.
    **구현 시점 예상**: 관측성/LangSmith 연동 시.
 4. **`Item.pending_decision`** (v16) — 스키마엔 있지만 이 POC 패스에서는 항상 None이다.
-   `picking_delay_gate`의 Stage1 판정이 재시도 예산 소진과 같은 tick 안에서 즉시 자동으로
+   `picking_delay_gate`의 Stage1 판정이 재시도 한도 소진과 같은 tick 안에서 즉시 자동으로
    `decision_log`까지 채워버려서, "현재 열린 결정"이 tick을 넘어 관측되는 경우가 없다.
    **구현 시점 예상**: 진짜 사람이 개입하는 별도 진입점(관리자 UI/CS 티켓 시스템 등, "판단 vs
    개입" 절의 경로B)이 생겨 그래프 실행 시점과 무관하게 판정을 미룰 수 있게 될 때.

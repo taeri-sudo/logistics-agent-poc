@@ -29,7 +29,7 @@ def order_validation_agent(state: GraphState) -> GraphState:
 
     delivery_addresses = order["delivery_addresses"]
     # 아래 순회 기반 검사(_is_valid_address)는 리스트가 비어 있으면 순회 자체가 안 일어나
-    # 아무것도 못 잡는다 — 이 검사가 그 구멍을 메운다.
+    # 아무것도 못 잡는다 — 이 검사가 그 누락을 보완한다.
     if not delivery_addresses:
         errors.append("delivery_addresses 비어 있음")
 
@@ -47,7 +47,7 @@ def order_validation_agent(state: GraphState) -> GraphState:
             )
 
     # item_id 중복 검사 — assembly.py의 _find_item()이 item_id 하나로 SourceItemRef→Item을
-    # 역참조하는데, 유일하지 않으면 서로 다른 item이 하나로 뒤섞인다(실측 확인: DESIGN.md
+    # 역참조하는데, 유일하지 않으면 서로 다른 item이 하나로 혼동된다(실측 확인: DESIGN.md
     # "item_id 중복" 항목 참고). 근본 해법(item_id와 분리된 order_item_id 신설)은 범위 밖이라
     # 보류하고, 여기서 입력 단계에 막는 임시방편.
     item_id_counts = Counter(item["item_id"] for item in order["item_list"])
