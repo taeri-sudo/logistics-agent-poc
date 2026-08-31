@@ -709,3 +709,16 @@ no-op) 최종 JSON 동일. 시나리오 11은 실 Gemini 호출이라 `escalatio
 매번 달라지는 기존 비결정성 그대로(결정 자체 — 보상조치/환불 — 는 동일). 시나리오 5/12에서
 기대했던 "무지연 패키지가 지연 해소를 기다리지 않고 먼저 전진" 동작을 로그로 직접 확인.
 `pyright` 0 errors.
+
+---
+
+## 8단계(코드 리뷰): "Agent-to-Agent 상호작용" 지향점 미달성 확인
+
+코드를 다시 검토하며 `supervisor.py`/`delay_gates.py`를 재확인한 결과, "Agent-to-Agent
+상호작용"(README.md/CLAUDE.md 목적 문단에 명시된 지향점)이 실제로는 구현되지 않았다는 걸
+확인했다. 각 노드가 독립적으로 자기 몫만 판단하고 그래프의 정적 edge 순서로만 연결되는
+구조였고, `predict_delay_escalation`(Supervisor의 LLM 판단)조차 별도 그래프 노드가 아니라
+`in_transit_delay_gate` 함수 안에 흡수돼 있어 "에이전트 간 상호작용"이라 부를 근거가 약했다.
+
+그래서 README.md/CLAUDE.md의 해당 문구를 "지향했으나 실제 구현에서는 달성되지 않은 방향"으로
+수정했다(DESIGN.md "아직 결정 안 된 것" 항목 신설과 연결).

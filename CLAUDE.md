@@ -2,7 +2,9 @@
 
 온톨로지 기반 물류 멀티에이전트 POC (LangGraph). 학습/포트폴리오용 최소 구현이며,
 엔드포인트로 사람뿐 아니라 센서/로봇(액추에이터)까지 포함하는 것을 지향한다.
-Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선순위가 높다.
+Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선순위 높은 구조를
+지향했으나, 실제 구현은 각 노드가 독립적으로 판단하고 그래프의 정적 edge 순서로만 연결되는
+구조에 가깝다 — 상세는 [DESIGN.md](DESIGN.md) "아직 결정 안 된 것" 참고.
 
 ## 작업 전 필수
 

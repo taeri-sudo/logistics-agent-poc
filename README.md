@@ -8,10 +8,12 @@
 조건분기, self-loop, 판단/개입의 구분)을 직접 구현해보고 이해하는 데 목적이 있으며, 이후 다른
 사례를 참고·엮어서 포트폴리오화할 예정입니다.
 
-엔드포인트를 사람뿐 아니라 센서·로봇(액추에이터)까지 포함하는 것을 지향합니다. 이 프로젝트에서
-Agent-to-Agent, Agent-to-Sensor/Actuator 통신은 사람 endpoint보다 우선순위가 높습니다 —
-`mock_carrier_signal`(실제로는 택배사 웹훅 자리)이나 창고처리agent의 Sensor/Action 호출이
-그 예시입니다.
+엔드포인트를 사람뿐 아니라 센서·로봇(액추에이터)까지 포함하는 것을 지향합니다. 설계 초기에는
+Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선순위 높은 구조를
+목표로 했습니다 — 하지만 실제 구현은 각 노드가 독립적으로 자기 몫만 판단하고 그래프의 정적인
+edge 순서로만 연결되는 구조에 가깝습니다. `mock_carrier_signal`(실제로는 택배사 웹훅 자리)이나
+창고처리agent의 Sensor/Action 호출은 그 지향점의 흔적(로그 태그 수준)일 뿐, 에이전트 간 실제
+상호작용은 아닙니다 — 상세는 [DESIGN.md](DESIGN.md) "아직 결정 안 된 것" 참고.
 
 ## 아키텍처 다이어그램
 

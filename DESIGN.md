@@ -605,6 +605,14 @@ class CompensationRecord(TypedDict):
   "포장완료"로 갱신한다. 초기 설계 원칙(Sensor→판단→Actuator)이 모든 노드에 일관되게
   재적용되지 않은 것으로 보이며, 실제 포장 설비/로봇 연동을 고려한다면 이 지점이 그 확장
   자리가 된다.
+- **"Agent-to-Agent 상호작용"이 지향점이었으나 실제로는 구현되지 않았다.** 서로의 판단을
+  참고해 판단을 바꾸는 관계(에이전트 간 상호작용)를 지향했지만, 실제로는 각 노드(Agent 포함)가
+  독립적으로 자기 몫만 판단하고 그래프의 정적인 edge 순서로만 연결돼 있다. `predict_delay_escalation`
+  (Supervisor의 LLM 판단)조차 별도 그래프 노드가 아니라 `in_transit_delay_gate` 함수 안에
+  흡수돼 있어([delay_gates.py:299](logistics_agent/nodes/delay_gates.py#L299)), "에이전트 간
+  상호작용"이라 부를 근거가 약하다 — 두 판단 주체가 메시지를 주고받는 구조가 아니라, 한 함수가
+  다른 함수를 그냥 호출하는 구조에 가깝다. README.md/CLAUDE.md의 관련 문구를 "지향했으나 실제
+  구현에서는 달성되지 않은 방향"으로 수정함(코드 변경 없음, JOURNAL.md 8단계 참고).
 <a id="dead-fields"></a>
 ## 미구현/죽은 필드 종합
 
