@@ -69,7 +69,7 @@ def picking_delay_gate(state: GraphState) -> GraphState:
     """피킹지연게이트: item_delay_reason이 있는 item만 대상으로 해소 여부 재확인.
 
     재시도 예산을 넘기면 Stage1 판정을 같은 tick 안에서 자동으로 끝낸다 — 회복불가면
-    품목취소, 회복가능이면 fulfillment_preference_on_delay를 참조해 부분수령/계속대기를
+    품목취소, 회복가능이면 fulfillment_preference_on_delay를 참조해 부분수령/합배송을
     자동 적용한다. 진짜 사람이 개입하는 별도 진입점은 아직 없어(경로B 미구현) 이 판정은
     항상 즉시 자동 해소된다 — pending_decision은 그 미래를 위한 스키마 자리일 뿐이다.
     """
@@ -145,9 +145,9 @@ def picking_delay_gate(state: GraphState) -> GraphState:
             decision["reasoning"] = f"{reason} 회복가능, 구매자 선호도(부분수령희망) 적용 - 그룹핑 제외"
             print(f"  [부분수령적용] item_id={item['item_id']} {reason} → 그룹핑 제외, 이후 별도 처리")
         else:
-            decision["outcome"] = "회복가능_계속대기적용"
-            decision["reasoning"] = f"{reason} 회복가능, 구매자 선호도(계속대기희망 또는 미설정) 적용 - 계속 대기"
-            print(f"  [계속대기적용] item_id={item['item_id']} {reason} → 계속 대기")
+            decision["outcome"] = "회복가능_합배송적용"
+            decision["reasoning"] = f"{reason} 회복가능, 구매자 선호도(합배송희망 또는 미설정) 적용 - 합배송 대기"
+            print(f"  [합배송적용] item_id={item['item_id']} {reason} → 합배송 대기")
 
         item_list[idx] = cast(
             Item,
@@ -189,7 +189,7 @@ def packaging_wait_gate(state: GraphState) -> GraphState:
 
     실제 해소는 피킹지연게이트가 item_delay_reason을 풀고 패키지조립agent가 재봉인하는
     경로로만 일어난다 — 이 게이트에 진입했을 때 이미 봉인돼 있으면 그대로 통과. 재시도
-    예산이 소진되면(전형적으로 "계속대기희망"으로 결정된 item을 영원히 기다리다 끝내
+    예산이 소진되면(전형적으로 "합배송희망"으로 결정된 item을 영원히 기다리다 끝내
     실패한 경우) 더 이상 기다리지 않고 보상조치(환불)로 귀결한다.
     """
     packages: list[PackageState] = list(state.get("packages", []))

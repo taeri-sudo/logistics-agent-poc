@@ -25,7 +25,7 @@ ItemStatus = Literal[
     "취소됨",
 ]
 ItemDelayReason = Literal["재고부족", "검수불량", "파손", "통관지연"]
-FulfillmentPreference = Literal["부분수령희망", "계속대기희망"]
+FulfillmentPreference = Literal["부분수령희망", "합배송희망"]
 CustomerFacingStatus = Literal[
     "주문접수",
     "준비중",

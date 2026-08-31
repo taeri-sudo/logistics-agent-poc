@@ -59,7 +59,7 @@ order-wide로 막던 gap을 고치며 이렇게 재구성했습니다 — 이전
 | `order_validation_agent` | 관문 · 조건분기 | `payment_status`, 배송지 검증 → 통과/실패 |
 | `decide_warehouse_entry` | 판단 (Supervisor) | 창고처리 진입 여부 판단(`decision_type=proceed_to_warehouse`). 예외가 없으면 규칙만으로 결정되는 판단이라 아직 더미(고정 판단) |
 | `warehouse_processing_agent` | 반복 (내장 루프) | `item_list` 순회, Sensor(위치확인)→Action(피킹). `item_delay_reason`이 있는 item은 피킹만 스킵하고 그대로 넘김 |
-| `picking_delay_gate` | 판단+반복 · self-loop | Item 기반. `item_delay_reason` 있는 item만 대상으로 해소 여부 재확인, self-loop. 재시도 예산 소진 시 Stage1 자동판정(회복불가→품목취소, 회복가능→선호도 기반 부분수령/계속대기 자동 적용) |
+| `picking_delay_gate` | 판단+반복 · self-loop | Item 기반. `item_delay_reason` 있는 item만 대상으로 해소 여부 재확인, self-loop. 재시도 예산 소진 시 Stage1 자동판정(회복불가→품목취소, 회복가능→선호도 기반 부분수령/합배송 자동 적용) |
 | `package_assembly_agent` | 집계 · 조건카운트 | 미배정 item을 배송지별 Package로 묶고, `required==arrived`면 봉인+`tracking_number` 발급 |
 | `packaging_agent` | 액션 | 봉인된 Package 소속의 피킹완료 item을 일괄 포장완료로 전이 |
 | `packaging_wait_gate` | 판단+반복 · self-loop (순수 워처) | 미봉인 Package(`tracking_number is None`) 감시만 함, 스스로 해소하지 않음. 재시도 예산 소진 시 보상조치(환불) |

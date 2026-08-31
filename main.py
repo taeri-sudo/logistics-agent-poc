@@ -235,14 +235,14 @@ def run_demo() -> None:
 
     print()
     print("=" * 60)
-    print("시나리오 10: Stage1 회복가능 판정 + 계속대기희망 → 패키지가 끝내 미봉인 → 보상조치(환불)")
+    print("시나리오 10: Stage1 회복가능 판정 + 합배송희망 → 패키지가 끝내 미봉인 → 보상조치(환불)")
     print("=" * 60)
     result_continue_waiting = app.invoke(
         {
             "user_id": "user-001",
             "confirmed_order_items": [
                 {
-                    # 통관지연 + 계속대기희망 → Stage1이 그룹핑에서 제외하지 않고 계속 대기시킴 →
+                    # 통관지연 + 합배송희망 → Stage1이 그룹핑에서 제외하지 않고 계속 대기시킴 →
                     # 이 배송지엔 이 item뿐이라 패키지가 영원히 미봉인 → 포장대기게이트 자체 재시도
                     # 예산(MAX_GATE_RETRIES)도 소진 → 보상조치(환불)로 귀결
                     "item_id": "SKU-701",
@@ -251,7 +251,7 @@ def run_demo() -> None:
                 },
             ],
             "payment_status_hint": "완료",
-            "fulfillment_preference_on_delay_hint": "계속대기희망",
+            "fulfillment_preference_on_delay_hint": "합배송희망",
         }
     )
     _print_result(result_continue_waiting)

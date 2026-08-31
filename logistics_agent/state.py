@@ -63,7 +63,7 @@ class PendingDecision(TypedDict):
 
 class ResolvedDecision(TypedDict):
     decision_type: str
-    outcome: str  # 예: "회복불가_품목취소" / "회복가능_부분수령적용" / "회복가능_계속대기적용"
+    outcome: str  # 예: "회복불가_품목취소" / "회복가능_부분수령적용" / "회복가능_합배송적용"
     decided_at: str
     reasoning: str
 
