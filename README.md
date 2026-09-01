@@ -89,7 +89,7 @@ order-wide로 막던 gap을 고치며 이렇게 재구성했습니다 — 이전
 venv\Scripts\python.exe main.py
 ```
 
-테스트 프레임워크는 없습니다 — `main.py`의 데모 시나리오 12개를 실행해 출력(JSON 요약)으로
+테스트 프레임워크는 없습니다 — `main.py`의 데모 시나리오 13개를 실행해 출력(JSON 요약)으로
 검증합니다. `in_transit_delay_gate`가 지연 카테고리를 만나면 Supervisor의
 `predict_delay_escalation`(Google Gemini 실제 호출)을 탑니다. `.env`의 `GOOGLE_API_KEY`가
 없으면 이 호출이 실패하고 `escalate_now=False`로 폴백하므로 데모 자체는 API 키 없이도 끝까지

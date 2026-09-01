@@ -141,7 +141,7 @@ def run_demo() -> None:
             "user_id": "user-001",
             "confirmed_order_items": [
                 {
-                    # 파손 → 회복불가 분류(재시도로도 영구 미해소) → 3회 재시도 소진 후 Stage1이
+                    # 파손 → 회복불가 분류(재시도로도 영구 미해소) → MAX_GATE_RETRIES 소진 후 Stage1이
                     # 즉시 자동으로 품목취소 확정 (item_status="취소됨"). 이 주소엔 이 item뿐이라
                     # 패키지 자체가 만들어지지 않고, 남은 배송 대상이 없어 internal_order_status는
                     # "전체무산"(전부취소의 vacuous case)으로 종결된다
@@ -214,7 +214,7 @@ def run_demo() -> None:
             "confirmed_order_items": [
                 {
                     # 통관지연 → 회복가능이지만 resolve_at=None이라 재시도로는 절대 안 풀림 →
-                    # 3회 재시도 소진 후 Stage1이 fulfillment_preference_on_delay="부분수령희망"을
+                    # MAX_GATE_RETRIES 소진 후 Stage1이 fulfillment_preference_on_delay="부분수령희망"을
                     # 참조해 자동 적용 → 이 item은 패키지조립agent 그룹핑에서 영구 제외된다
                     "item_id": "SKU-601",
                     "delivery_address_id": "ADDR-HOME",
