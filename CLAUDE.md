@@ -6,6 +6,18 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
 지향했으나, 실제 구현은 각 노드가 독립적으로 판단하고 그래프의 정적 edge 순서로만 연결되는
 구조에 가깝다 — 상세는 [DESIGN.md](DESIGN.md) "아직 결정 안 된 것" 참고.
 
+## 문서 언어 안내
+
+README.md는 영문판(README.en.md)이 별도로 존재하지만, CLAUDE.md/DESIGN.md/JOURNAL.md는
+한국어 버전만 유지한다 — 이 세 파일은 외부 독자용이 아니라 설계 판단을 기록/참고하기 위한
+내부용 문서이기 때문이다. 코드 작업 시 참고하는 원본은 항상 이 한국어 파일들이며,
+README.en.md는 번역 결과물일 뿐 별도의 판단 근거를 담지 않는다.
+
+README.md를 수정할 때는 README.en.md도 같은 변경을 반영한다 — 두 파일은 언어만 다를 뿐
+내용이 동기화돼야 한다. 한쪽만 고치고 다른 쪽을 잊는 경우가 반복돼왔으므로(CLAUDE.md
+버전 표기, README.md 시나리오 개수 사례 참고), README.md 수정 후에는 README.en.md도
+같이 확인한다.
+
 ## 작업 전 필수
 
 **코드를 수정하기 전에 [DESIGN.md](DESIGN.md)를 반드시 읽을 것.**
