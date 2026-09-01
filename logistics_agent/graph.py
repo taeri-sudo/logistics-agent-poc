@@ -3,8 +3,7 @@
 
 마지막 세 노드는 하나의 통합 self-loop다 — 배송중게이트가 이번 틱의 지연을 처리하고,
 mock_carrier_signal이 미해소 지연이 없는 패키지만 전진시키고, 추적agent가 파생값을
-재계산해 계속할지 정한다(route_after_in_transit_cycle). 지연 패키지 하나가 같은 주문의
-무지연 패키지까지 order-wide로 막던 gap을 고치며 세 노드를 이렇게 합쳤다(DESIGN.md 참고)."""
+재계산해 계속할지 정한다(route_after_in_transit_cycle)."""
 
 from __future__ import annotations
 

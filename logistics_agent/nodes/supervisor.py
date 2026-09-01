@@ -34,13 +34,10 @@ load_dotenv()
 
 # 모델명은 Gemini 라인업이 바뀌어도 코드 수정 없이 .env에서 덮어쓸 수 있게 env var로 뺌.
 # .env에 키만 있고 값이 빈 문자열인 경우도 "설정 안 함"으로 취급 (or로 처리).
-# gemini-3.6-flash에서 gemini-3.5-flash-lite로 교체 (이유: DESIGN.md "Gemini 모델 교체" 참고).
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash-lite"
 
 # 직전 Gemini 호출로부터 최소 이 간격(초)은 띄운다 — 모델이 뭐든 적용되는 안전장치.
-# 이전 세션에서 RPM 한도를 넘겨 호출이 끊긴 적이 있었다(정확한 로그는 세션 경계로 소실,
-# DESIGN.md "Gemini 모델 교체" 참고) — 그 재발을 막는 게 목적이라 모델별 실제 한도를 조회해
-# 정교하게 맞추기보다 보수적인 고정값을 기본으로 둔다. RPM_LIMIT을 낮게 잡을수록 더 오래 기다림.
+# RPM_LIMIT을 낮게 잡을수록 더 오래 기다림. 배경/이유는 JOURNAL.md "Gemini 모델 교체" 참고.
 GEMINI_RPM_LIMIT = int(os.environ.get("GEMINI_RPM_LIMIT") or 6)
 _MIN_CALL_INTERVAL_SEC = 60.0 / GEMINI_RPM_LIMIT
 _last_call_at: float | None = None
