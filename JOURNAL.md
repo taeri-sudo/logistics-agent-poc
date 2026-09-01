@@ -246,14 +246,9 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
 해뒀을 뿐 실제로 구현된 decision_type은 `proceed_to_warehouse`(규칙 기반 더미) 하나뿐이었다.
 이번에 `predict_delay_escalation`을 추가하면서 이 프로젝트에서 **처음으로 실제 LLM을 호출**한다.
 
-- **LLM 선택 — Anthropic이 아니라 Google Gemini(무료 티어).** `langchain-google-genai`로 구현
-  (langgraph 기반이라 provider 교체가 쉬움 — LangChain의 채팅모델 인터페이스로 감싸뒀기 때문).
-  `GOOGLE_API_KEY`를 `.env`에서 읽는다(`python-dotenv`). 모델명은 `GEMINI_MODEL` env var로
-  코드 수정 없이 바꿀 수 있게 뺐다(기본값 `gemini-3.6-flash`) — Gemini 라인업이 이후 바뀌어도
-  대응 가능하도록. **실제로 이 대비가 바로 쓰였다**: 처음 기본값으로 넣었던 `gemini-2.5-flash`가
-  실제 키로 호출해보니 "신규 사용자에게는 더 이상 제공 안 함, `gemini-3.6-flash` 쓰라"는 404를
-  반환해서(라이브 API가 알려준 값 그대로 반영), 하드코딩이 아니라 env var였던 덕분에 로직 변경 없이
-  기본값만 바꾸는 걸로 끝났다.
+- **모델명을 env var로 분리한 설계가 실제로 도움이 됐다.** 초기 기본값
+  `gemini-2.5-flash`가 신규 사용자 제공 중단(404)으로 막혔을 때, 하드코딩이 아니었던
+  덕분에 로직 변경 없이 기본값만 교체해 대응했다.
 - **별도 그래프 노드를 만들지 않았다.** `predict_delay_escalation`은 배송중게이트가 필요할 때
   함수로 직접 호출한다 — 배송중게이트가 이미 "판단+반복" 노드라 그 판단 로직에 흡수하는 쪽이
   노드를 늘리는 것보다 낫다고 판단(CLAUDE.md의 "새 노드보다 흡수" 원칙).
@@ -282,11 +277,10 @@ Supervisor는 처음부터 "decision_type + payload 구조로 여러 판단 종�
   조기 에스컬레이션할까"를 관찰하게 설계. **결과는 실제 Gemini 호출에 달려있어 결정론적이지
   않다** — 지금까지의 모든 시나리오와 다른 점. `GOOGLE_API_KEY` 미설정 시에는 폴백 경로를 타서
   시나리오5와 동일하게 정상 해소로 끝난다(API 키 없이도 데모 전체가 깨지지 않음).
-  **실제 키로 라이브 검증 완료**: `retry_count=0`인 첫 틱에서 Gemini가 `escalate_now=True`,
-  reasoning="주문 생성 후 240시간이 지난 상황으로, 자동 재시도 횟수와 관계없이 지연 시간이
-  매우 길어 즉시 담당자 확인 및 에스컬레이션이 필요합니다"를 반환 — 고정 카운터라면 그냥
-  1틱 더 기다렸을 상황을 Supervisor가 실제로 앞당겨 잡아낸 것을 확인했다. 다만 이건 한 번의
-  관측일 뿐 매 실행마다 같은 결과가 보장되지는 않는다(비결정론은 여전함).
+  **실제 키로 라이브 검증 완료**: `retry_count=0`인 첫 틱에서도 Gemini가 조기
+  에스컬레이션(`escalate_now=True`)을 실제로 반환하는 것을 확인했다 — 고정 카운터였다면
+  그냥 1틱 더 기다렸을 상황을 Supervisor가 앞당겨 잡아낸 것. 다만 한 번의 관측일 뿐
+  매 실행마다 같은 결과가 보장되지는 않는다(비결정론은 여전함).
 
 ### Gemini 모델 교체 (gemini-3.6-flash → gemini-3.5-flash-lite) + RPM 안전장치 추가
 
