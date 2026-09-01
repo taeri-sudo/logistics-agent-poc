@@ -505,13 +505,16 @@ DESIGN.md의 State 스키마는 현재(v16) 상태만 담는다. 각 버전이 �
 > — "주문 생성 이후 경과 시간"을 predict_delay_escalation의 입력 신호로 쓰려면 데모에서 과거 시각을
 > 강제할 방법이 필요해서 추가(`payment_status_hint`류와 같은 진입 입력 패턴).
 >
-> v15 → v16 변경 (6단계, 사람 개입 워크플로우 코드 반영): **`escalated` bool 2곳 모두 제거.**
+> v15 → v16 변경 (6단계, 사람 개입 워크플로우 코드 반영): 5단계 코드 리뷰에서 "escalated가
+> 기업담당자/구매자 상황을 구분 못 한다"는 것과 "split_delivery_preference가 사전 선택으로
+> 잘못 설계됐다(실제로는 문제 발생 시점의 사후 결정이어야 함)"는 두 이슈가 발견되어 아래처럼
+> 반영했다. **`escalated` bool 2곳 모두 제거.**
 > `Item.escalated` → `pending_decision`/`decision_log`(판단/기록 분리, 원칙3). `PackageState.escalated`
 > → `compensation`(보상조치 실행 기록 — 포장대기게이트/배송중게이트 공유 필드라 둘 다 통합).
 > `OrderState.split_delivery_preference` 제거 → `fulfillment_preference_on_delay` 신설(사전
 > 확정 지시 → 문제 발생 시점 참조 선호도로 재설계). `InternalOrderStatus`에 "부분완료",
 > `ItemStatus`에 "취소됨", `CustomerFacingStatus`에 "상품준비불가", `ItemDelayReason`에
-> "통관지연"(새 데모 트리거용) 추가. 확정 근거는 아래 "6단계" 절 참고.
+> "통관지연"(새 데모 트리거용) 추가. 필드 단위 변경 상세(diff 표)와 확정 근거는 아래 "6단계" 절 참고.
 
 ## 5단계(코드 리뷰): 사람 개입 워크플로우 재설계 — 논의 과정
 
@@ -577,6 +580,48 @@ DESIGN.md의 "사람 개입 워크플로우" 절에 있는 최종 결론(도메�
 5단계에서 "다음 세션에서 이어갈 것"으로 남긴 3항목을 확정하고 v16 스키마를 실제 코드에
 반영했다. 확정 근거와, 그 과정에서 새로 발견돼 사용자에게 추가로 확인받은 파생 이슈 2개를
 기록한다. 최종 결론은 DESIGN.md에 있고, 여기는 "왜 그렇게 정했는가"다.
+
+**v16 스키마 필드 변경 상세 (v15 대비 diff).**
+
+*OrderState*
+| 필드 | 변경 |
+|---|---|
+| ~~split_delivery_preference: bool~~ | 제거. "사전에 무조건 분리"라는 개념 자체가 잘못 설계였다는 판단 — assembly.py 그룹핑 로직도 함께 제거, 이를 검증하던 시나리오 9/11도 폐기 |
+| `fulfillment_preference_on_delay: "부분수령희망"\|"합배송희망"\|None` | 신설. 기본값 None은 "합배송희망"과 동일하게 취급 |
+| `internal_order_status` | 값 추가 — **"부분완료"**(취소/영구제외된 item이 있는 채로 잔여 item이 전부 배송완료). 진행 중(조립중~배송중)에는 취소 여부를 반영하지 않음(원칙2 — 순차단계와 별개 축). vacuous case(전부 취소/제외돼 배송된 item이 하나도 없음)는 이후 "전체무산"으로 분리 — "부분"이 성립하려면 대비되는 "온 것"이 있어야 하는데 vacuous case는 그 전제가 없어 별도 값이 맞다는 판단(DESIGN.md 진행 상황 6단계 후속 참고) |
+| `cancel_status`/`cancel_requested_at` | 변경 없음 — 주문 전체 취소 흐름 전용으로 유지, 품목 단위 취소는 별도 경로(`decision_log`) |
+
+*Item*
+| 필드 | 변경 |
+|---|---|
+| ~~escalated: bool~~ | `pending_decision: PendingDecision \| None`로 대체 |
+| (신설) | `decision_log: list[ResolvedDecision]` — 원칙3(판단/기록 분리): `pending_decision`은 현재 열린 결정, `decision_log`는 해소된 결정의 기록. 이 POC 패스에서는 Stage1 판정이 재시도 한도 소진과 같은 tick에서 즉시 자동 해소되므로 `pending_decision`이 실제로 non-None으로 관측되는 경우가 없다 — DESIGN.md "미구현/죽은 필드 종합" 참고 |
+| `item_status` | 값 추가 — "취소됨" |
+| `customer_facing_status` | 값 추가 — "상품준비불가" |
+| `item_delay_reason` | 필드 변경 없음, 취소 확정 후에도 null로 안 되돌림(취소 사유 기록으로 유지) |
+
+Stage1 판정(`delay_gates.py`의 `picking_delay_gate`)은 재시도 한도(`MAX_GATE_RETRIES`) 소진
+시점에 `_ITEM_RECOVERABLE`(회복가능 여부, `resolve_at`과 분리된 별도 매핑)을 먼저 보고:
+회복불가(파손)면 즉시 품목취소, 회복가능(재고부족/검수불량/통관지연)이면
+`fulfillment_preference_on_delay`를 참조해 부분수령/합배송을 자동 적용한다. 부분수령으로
+결정된 item은 `package_assembly_agent`의 그룹핑에서 영구 제외된다(`_is_assembly_eligible`) —
+그래프 재진입성이 없어 이 POC에서는 다시 조립되지 않는다(DESIGN.md "아직 결정 안 된 것" 참고).
+
+*PackageState*
+| 필드 | 변경 |
+|---|---|
+| ~~escalated: bool~~ | `compensation: CompensationRecord \| None`로 대체 — 포장대기게이트/배송중게이트가 공유하는 필드였어서 **두 게이트 모두** 같은 모델로 통합(5단계 초안은 배송중게이트만 다뤘음, 아래 "파생 이슈2" 참고) |
+| `escalation_reasoning` | 유지, 의미 재해석 — "사람이 봐야 함"의 근거가 아니라 "이 보상조치/알림을 취한" 근거 기록으로 |
+
+자연재해 즉시분기 / Supervisor `predict_delay_escalation`의 `escalate_now=True`(회복불가로
+재해석) / 재시도 한도 소진(회복가능으로 지켜봤으나 끝내 미해소, 안전장치) — 이 세 경로가
+배송중게이트에서 전부 `compensation` 실행으로 수렴한다. 포장대기게이트도 재시도 한도 소진 시
+같은 모델로 수렴(`_compensate` 헬퍼 공유). "사람을 기다리는 대기 상태"를 persist하지 않는다는
+설계 의도가 이걸로 완성됨.
+
+타입 정의(`PendingDecision`/`ResolvedDecision`/`CompensationRecord`)의 실제 필드 구성은
+DESIGN.md "State 스키마" 절(PendingDecision/ResolvedDecision/CompensationRecord 하위 섹션)
+참고 — 이 문서는 "무엇이 왜 바뀌었는지"만 남기고, 현재 스키마의 정본은 DESIGN.md 한 곳에 둔다.
 
 **미정1 (internal_order_status "부분배송중"류) — "부분완료" 1개만 신설로 확정.** 대칭되는
 2개 값(부분배송중/부분완료)도 검토했으나, 원칙2(순차단계 enum vs 교차조건 bool) 관점에서

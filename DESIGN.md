@@ -9,7 +9,6 @@
   - [판단(decision) vs 개입(intervention) vs escalated](#concept-decision-intervention)
   - [지연 사유의 세 계층](#concept-delay-layers)
   - ["재고부족" 개념의 세 가지 층위](#concept-stockout-layers)
-- [사람 개입 워크플로우 — 도메인 분리 기반 재설계 (v16)](#human-intervention-redesign)
 - [노드 목록 (최종)](#node-list)
   - [제거/통합된 것들](#removed-integrated)
 - [State 스키마 (v16)](#state-schema)
@@ -19,6 +18,9 @@
   - [Package State](#schema-package)
   - [Location](#schema-location)
   - [GpsPoint](#schema-gpspoint)
+  - [PendingDecision](#schema-pendingdecision)
+  - [ResolvedDecision](#schema-resolveddecision)
+  - [CompensationRecord](#schema-compensationrecord)
   - [UserProfile](#schema-userprofile)
   - [PaymentMethod](#schema-paymentmethod)
 - [검토 후 현재 구조 유지로 확정](#settled-decisions)
@@ -52,10 +54,11 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
 - [x] 4단계 후속: `_PACKAGE_DELAY_SIGNAL` 키를 `delivery_address_id`→`item_id`로 교체
 - [x] 4단계 후속: 출고전게이트 → **피킹지연게이트**로 개명
 - [x] 5단계(코드 리뷰): 사람 개입 워크플로우 구체화 설계(도메인 분리 기반, v16 스키마 초안) —
-  아래 "사람 개입 워크플로우" 절 참고.
+  아래 "핵심 개념 > 판단 vs 개입 vs escalated" 절 참고.
 - [x] 6단계: 사람 개입 워크플로우 v16 코드 반영 (Item Stage1 자동판정 + Package 보상조치(환불)
   모델). `split_delivery_preference` 제거(시나리오 9/11 폐기 포함). 그래프 재진입성(부분수령
-  item의 재조립)은 여전히 미구현 — 아래 "사람 개입 워크플로우" 절과 "아직 결정 안 된 것" 참고
+  item의 재조립)은 여전히 미구현 — 아래 "핵심 개념 > 판단 vs 개입 vs escalated" 절과 "아직
+  결정 안 된 것" 참고
 - [x] 6단계 후속(코드 리뷰): `tracking.py`의 파생값 계산이 `PackageState.compensation`(v16
   신설)을 전혀 읽지 않던 gap 수정 — 미봉인 상태로 보상조치된 패키지가 있으면
   `internal_order_status`가 그래프 종료 후에도 영원히 "조립중"에 멈추는 버그였음(시나리오 10으로
@@ -130,7 +133,7 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
 <a id="concept-decision-intervention"></a>
 ### 판단(decision) vs 개입(intervention) vs escalated
 > v16에서 `escalated` 필드 자체는 `Item.pending_decision`/`decision_log`와
-> `PackageState.compensation`으로 대체됐다(아래 "사람 개입 워크플로우" 절 참고). 이 절이 설명하는
+> `PackageState.compensation`으로 대체됐다(아래 "도메인 분리 기반 재설계" 참고). 이 절이 설명하는
 > **개념**(판단/개입의 구분, 경로A/경로B)은 그대로 유효해 필드명 그대로 남겨둔다.
 
 - **`escalated`** — 舊 State 필드명(v16에서 제거). "재시도 한도를 넘었다/조기 신호가 있었다"는
@@ -162,6 +165,41 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
 일어난다. `escalated=True`로 마킹된 상태가 영속화되고, 그래프 바깥의 **완전히 별도의
 진입점**(관리자 UI, CS 티켓 시스템, 별도 API 등)이 그 상태를 읽어 사람의 결정을 다시 State에
 반영하는 구조여야 한다.
+
+**도메인 분리 기반 재설계 (v16, 코드 반영 완료).** `mock_carrier_signal`이 "실제로는 택배사
+웹훅이 들어올 자리"라는 기존 경계(JOURNAL.md 4단계 후속 참고)를 워크플로우 전체에 일관되게
+적용해, 두 도메인으로 나눈다:
+- **주문/재고/창고 영역** (피킹지연게이트~포장agent): 판단에 필요한 정보(재고 실물 상태, 파손
+  여부)를 시스템이 갖지 못하고 운영자만 안다.
+- **실제 운송 영역** (배송중게이트~추적agent): 실제로는 택배사가 담당, 우리는 위탁하는 입장.
+
+**결론의 핵심 근거 (상세 논의는 [JOURNAL.md](JOURNAL.md) "5단계: 사람 개입 워크플로우 재설계 —
+논의 과정" 참고)**: 1차 판단자를 가르는 기준은 계층(Item/Package)이 아니라 "누가 판단에 필요한
+정보를 가졌는가"이며, 창고 실물 상태는 계층과 무관하게 항상 운영자만 안다. 구매자 실시간 개입은
+두 도메인 모두에서 사라지지만 이유가 다르다 — Item 도메인은 사전 선호도 등록으로 왕복이
+**불필요해지고**, Package 도메인은 봉인된 패키지가 품목을 차등 취급할 수 없어 애초에
+**구조적으로 불가능**하다.
+
+**Item 도메인(피킹지연게이트) — Stage1(운영자, 항상 최초, 경로B).** 창고 실물 상태는 시스템이
+갖지 못한 정보라 LLM으로 대체하지 않는다.
+- **회복불가**(예: 파손) → 품목 단위 취소로 확정, 나머지 품목은 정상 진행 — **주문 전체 취소가
+  아니다**(원칙6과 가장 잘 맞는 스코프).
+- **회복가능**(예: 재고부족) → `fulfillment_preference_on_delay`(사전등록된 선호도)를 참조해
+  부분수령/합배송을 자동 처리. 필드 상세는 [Order State](#schema-order) 참고.
+- 구매자에게 실시간으로 묻는 단계가 없다 — 선호도 사전등록으로 운영자 판단 이후 왕복이 불필요.
+
+**Package 도메인(배송중게이트) 재설계.**
+- "운영자가 재라우팅을 판단한다"는 표현은 부정확하다 — 실제로는 택배사(외부 시스템)의 신호를
+  받아 반응하는 성격이다.
+- "부분수령" 선택지가 이 도메인엔 존재할 수 없다 — 봉인된 Package는 이미 고정된 품목 구성을
+  갖고, `delay_categories`는 원칙1에 따라 Package 사건이지 개별 Item 사건이 아니다.
+- **회복불가** → 보상조치([CompensationRecord](#schema-compensationrecord) 참고, POC 범위:
+  환불만). 구매자 선택 불필요.
+- **회복가능** → `notification_enabled` 참조해 알림만(선택적).
+- `predict_delay_escalation`의 `escalate_now`를 회복불가/회복가능 분류값으로 재해석한다 —
+  함수 자체는 유지, 출력의 의미만 재정의.
+- 이 도메인은 결과적으로 **사람 개입(경로B) 자체가 불필요해진다** — 전부 결정론적 액션으로
+  귀결돼 persist할 "대기 상태"가 없어지기 때문이다.
 
 <a id="concept-delay-layers"></a>
 ### 지연 사유의 세 계층
@@ -212,122 +250,6 @@ Agent-to-Agent, Agent-to-Sensor/Actuator 통신이 사람 endpoint보다 우선�
 세 층위를 하나의 "재고부족" 필드/노드로 뭉뚱그리지 않고 분리해서 본 것이 핵심 — 층위2에
 Supervisor 판단을 무리하게 끼워 넣거나, 층위3(예측)을 이 워크플로우 안에 노드로 만들려는
 시도는 둘 다 잘못된 방향이었을 것.
-
----
-
-<a id="human-intervention-redesign"></a>
-## 사람 개입 워크플로우 — 도메인 분리 기반 재설계 (v16, 코드 반영 완료)
-
-5단계(코드 리뷰) 중 "escalated가 기업담당자/구매자 상황을 구분 못 한다"는 것과
-"split_delivery_preference가 사전 선택으로 잘못 설계됐다(실제로는 문제 발생 시점의
-사후 결정이어야 함)"는 두 이슈가 발견되어, 위 "핵심 개념"을 이어 구체적인 설계로 발전시켰다.
-6단계에서 코드에 반영했다 — `logistics_agent/nodes/delay_gates.py`(Item Stage1 자동판정 +
-Package 보상조치)/`assembly.py`(그룹핑 제외)/`tracking.py`(파생값)/`state.py`/`enums.py` 참고.
-**단, 그래프 재진입성(부분수령으로 제외된 item을 나중에 다시 조립하는 것)은 여전히 미구현이다**
-— 아래 "미정으로 남기는 항목"과 "아직 결정 안 된 것" 참고.
-
-**두 도메인 구분.** `mock_carrier_signal`이 "실제로는 택배사 웹훅이 들어올 자리"라는 기존
-경계(JOURNAL.md 4단계 후속 참고)를 워크플로우 전체에 일관되게 적용한 결과다.
-- **주문/재고/창고 영역** (피킹지연게이트~포장agent): 우리가 직접 운영. 판단에 필요한 정보
-  (재고 실물 상태, 파손 여부)를 시스템이 갖지 못하고 운영자만 안다.
-- **실제 운송 영역** (배송중게이트~추적agent): 실제로는 택배사가 담당, 우리는 위탁하는 입장.
-
-**결론의 핵심 근거 (상세 논의는 [JOURNAL.md](JOURNAL.md) "5단계: 사람 개입 워크플로우 재설계 —
-논의 과정" 참고)**: 1차 판단자를 가르는 기준은 계층(Item/Package)이 아니라 "누가 판단에 필요한
-정보를 가졌는가"이며, 창고 실물 상태는 계층과 무관하게 항상 운영자만 안다. 구매자 실시간 개입은
-두 도메인 모두에서 사라지지만 이유가 다르다 — Item 도메인은 사전 선호도 등록으로 왕복이
-**불필요해지고**, Package 도메인은 봉인된 패키지가 품목을 차등 취급할 수 없어 애초에
-**구조적으로 불가능**하다.
-
-**Item 도메인 (피킹지연게이트) 재설계.**
-- `OrderState.fulfillment_preference_on_delay: "부분수령희망"|"합배송희망"|None` 신설.
-  `split_delivery_preference`와 다른 개념 — 그건 "확정 지시"(사전에 포장 방식을 고정함)였지만
-  이건 **"미래 대비 선호도"**(문제가 실제로 생겼을 때만 참조됨)다. 주문 시점에 사전등록.
-- Stage1(운영자, 항상 최초, 경로B — 실제 사람. 창고 실물 상태는 시스템이 갖지 못한 정보라
-  LLM으로 대체하지 않는다):
-  - **회복불가**(예: 파손) → **품목 단위 취소**로 확정. 나머지 품목은 정상 진행(결과적으로
-    부분수령과 동일한 효과). **주문 전체 취소가 아니다** — 원칙6과 가장 잘 맞는 스코프.
-  - **회복가능**(예: 재고부족) → `fulfillment_preference_on_delay` 값을 참조해
-    부분수령/합배송을 자동 처리.
-- 구매자에게 실시간으로 묻는 단계가 없다 — 선호도 사전등록으로 운영자 판단 이후 왕복이 불필요.
-
-**Package 도메인 (배송중게이트) 재설계.**
-- "운영자가 재라우팅을 판단한다"는 표현은 부정확하다 — 실제로는 택배사(외부 시스템)의 신호를
-  받아 반응하는 성격이다.
-- "부분수령" 선택지가 이 도메인엔 존재할 수 없다 — 봉인된 Package는 이미 고정된 품목 구성을
-  갖고, `delay_categories`는 원칙1에 따라 Package 사건이지 개별 Item 사건이 아니다.
-- **회복불가** → 보상조치(환불/재발송 — 범위 미정, 아래 "미정 항목" 참고). 구매자 선택 불필요.
-- **회복가능** → `notification_enabled` 참조해 알림만(선택적).
-- `predict_delay_escalation`의 `escalate_now`를 회복불가/회복가능 분류값으로 재해석한다 —
-  함수 자체는 유지, 출력의 의미만 재정의. 자연재해 즉시분기(위 계층3)도 "회복불가로 분류되는
-  카테고리 하나"로 흡수될 가능성이 높다(코드 변경 시 재검토).
-- 이 도메인은 결과적으로 **사람 개입(경로B) 자체가 불필요해진다** — 전부 결정론적 액션으로
-  귀결되기 때문. persist할 "대기 상태"가 없어진다는 뜻이기도 하다.
-
-**customer_facing_status 신규 값 — "상품준비불가".** "지연"(자동재시도/운영자 검토 중, 미확정)과
-구분되는 확정 취소 상태로 신설한다. 원인 불문 중립 라벨을 쓰는 근거는 JOURNAL.md 참고.
-
-**v16 스키마 (v15 대비 diff, 코드 반영 완료).**
-
-*OrderState*
-| 필드 | 변경 |
-|---|---|
-| ~~split_delivery_preference: bool~~ | 제거. "사전에 무조건 분리"라는 개념 자체가 잘못 설계였다는 판단 — assembly.py 그룹핑 로직도 함께 제거, 이를 검증하던 시나리오 9/11도 폐기(JOURNAL.md 6단계 참고) |
-| `fulfillment_preference_on_delay: "부분수령희망"\|"합배송희망"\|None` | 신설. 기본값 None은 "합배송희망"과 동일하게 취급 |
-| `internal_order_status` | 값 추가 — **"부분완료"**(취소/영구제외된 item이 있는 채로 잔여 item이 전부 배송완료). 진행 중(조립중~배송중)에는 취소 여부를 반영하지 않음(원칙2 — 순차단계와 별개 축). vacuous case(전부 취소/제외돼 배송된 item이 하나도 없음)는 v16 후속에서 **"전체무산"**으로 분리(아래 참고) — "부분"이 성립하려면 대비되는 "온 것"이 있어야 하는데 vacuous case는 그 전제가 없어 별도 값이 맞다는 판단 |
-| `cancel_status`/`cancel_requested_at` | 변경 없음 — 주문 전체 취소 흐름 전용으로 유지, 품목 단위 취소는 별도 경로(`decision_log`) |
-
-*Item*
-| 필드 | 변경 |
-|---|---|
-| ~~escalated: bool~~ | `pending_decision: PendingDecision \| None`로 대체 |
-| (신설) | `decision_log: list[ResolvedDecision]` — 원칙3(판단/기록 분리): `pending_decision`은 현재 열린 결정, `decision_log`는 해소된 결정의 기록. **이 POC 패스에서는 Stage1 판정이 재시도 한도 소진과 같은 tick에서 즉시 자동 해소되므로 `pending_decision`이 실제로 non-None으로 관측되는 경우가 없다** — "미구현/죽은 필드" 참고 |
-| `item_status` | 값 추가 — "취소됨" |
-| `customer_facing_status` | 값 추가 — "상품준비불가" |
-| `item_delay_reason` | 필드 변경 없음, 취소 확정 후에도 null로 안 되돌림(취소 사유 기록으로 유지) |
-
-```python
-class PendingDecision(TypedDict):
-    decision_type: str  # 예: "품목_회복가능성_판단"
-    reasoning: str       # 왜 이 시점에 운영자가 봐야 하는지
-    requested_at: str
-
-class ResolvedDecision(TypedDict):
-    decision_type: str
-    outcome: str          # 예: "회복불가_품목취소" / "회복가능_부분수령적용" / "회복가능_합배송적용"
-    decided_at: str
-    reasoning: str
-```
-
-Stage1 판정(`delay_gates.py`의 `picking_delay_gate`)은 재시도 한도(`MAX_GATE_RETRIES`) 소진
-시점에 `_ITEM_RECOVERABLE`(회복가능 여부, `resolve_at`과 분리된 별도 매핑)을 먼저 보고:
-회복불가(파손)면 즉시 품목취소, 회복가능(재고부족/검수불량/통관지연)이면
-`fulfillment_preference_on_delay`를 참조해 부분수령/합배송을 자동 적용한다. 부분수령으로
-결정된 item은 `package_assembly_agent`의 그룹핑에서 영구 제외된다(`_is_assembly_eligible`) —
-그래프 재진입성이 없어 이 POC에서는 다시 조립되지 않는다(아래 "아직 결정 안 된 것" 참고).
-
-*PackageState*
-| 필드 | 변경 |
-|---|---|
-| ~~escalated: bool~~ | `compensation: CompensationRecord \| None`로 대체 — 포장대기게이트/배송중게이트가 공유하는 필드였어서 **두 게이트 모두** 같은 모델로 통합(5단계 초안은 배송중게이트만 다뤘음, JOURNAL.md 6단계 참고) |
-| `escalation_reasoning` | 유지, 의미 재해석 — "사람이 봐야 함"의 근거가 아니라 "이 보상조치/알림을 취한" 근거 기록으로 |
-
-```python
-class CompensationRecord(TypedDict):
-    action: str        # POC 범위: "환불"만 (재발송은 확장 지점)
-    executed_at: str
-```
-
-자연재해 즉시분기 / Supervisor `predict_delay_escalation`의 `escalate_now=True`(회복불가로
-재해석) / 재시도 한도 소진(회복가능으로 지켜봤으나 끝내 미해소, 안전장치) — 이 세 경로가
-배송중게이트에서 전부 `compensation` 실행으로 수렴한다. 포장대기게이트도 재시도 한도 소진 시
-같은 모델로 수렴(`_compensate` 헬퍼 공유). "사람을 기다리는 대기 상태"를 persist하지 않는다는
-설계 의도가 이걸로 완성됨.
-
-**해소된 미정 항목 (5단계 → 6단계, 확정 근거는 JOURNAL.md 6단계 참고).**
-1. `InternalOrderStatus` 값 이름: **"부분완료"** 1개만(대칭 2개 값 아님).
-2. Package 보상조치 실행 범위: **환불만**(재발송은 확장 지점).
-3. 새 데모 트리거: **`ItemDelayReason="통관지연"`** 신설(회복가능이지만 `resolve_at=None`).
 
 ---
 
@@ -428,8 +350,8 @@ class CompensationRecord(TypedDict):
 | policy_version_applied | string/null | 지연 감지 당시 적용 정책 버전 (PackageState 동명 필드와 대칭) |
 | last_checked_at | timestamp/null | 피킹지연게이트 폴링 기록. 지연 이력이 없으면 null |
 | retry_count | int | 피킹지연게이트 self-loop 진입 횟수 |
-| pending_decision | PendingDecision/null | v16, 舊 escalated. Stage1 판정의 "현재 열린 결정" — 이 POC에서는 항상 즉시 자동 해소돼 실제로 non-None 관측 안 됨 |
-| decision_log | list[ResolvedDecision] | v16 신설. Stage1 판정의 해소 기록. outcome: 회복불가_품목취소/회복가능_부분수령적용/회복가능_합배송적용 |
+| pending_decision | PendingDecision/null | v16, 舊 escalated. Stage1 판정의 "현재 열린 결정" — 이 POC에서는 항상 즉시 자동 해소돼 실제로 non-None 관측 안 됨. 아래 [PendingDecision](#schema-pendingdecision) 참고 |
+| decision_log | list[ResolvedDecision] | v16 신설. Stage1 판정의 해소 기록. outcome: 회복불가_품목취소/회복가능_부분수령적용/회복가능_합배송적용. 아래 [ResolvedDecision](#schema-resolveddecision) 참고 |
 
 <a id="schema-package"></a>
 ### Package State
@@ -446,7 +368,7 @@ class CompensationRecord(TypedDict):
 | policy_version_applied | string/null | 지연 감지 당시 적용 정책 버전 (역추적/감사용) |
 | last_checked_at | timestamp | 모니터링 폴링 기록 |
 | retry_count | int | 지연체크게이트(포장대기게이트/배송중게이트)의 self-loop 진입(폴링) 횟수 |
-| compensation | CompensationRecord/null | v16, 舊 escalated. 보상조치(POC 범위: 환불만) 실행 기록 — 판단이 즉시 액션으로 끝나 persist할 대기 상태가 없어짐. non-null이면 이후 두 게이트 모두 스킵 |
+| compensation | CompensationRecord/null | v16, 舊 escalated. 보상조치(POC 범위: 환불만) 실행 기록 — 판단이 즉시 액션으로 끝나 persist할 대기 상태가 없어짐. non-null이면 이후 두 게이트 모두 스킵. 아래 [CompensationRecord](#schema-compensationrecord) 참고 |
 | escalation_reasoning | string/null | 이 보상조치/알림을 취한 근거 텍스트 — 설명가능성(v16, 의미 재해석). 대부분 Supervisor(predict_delay_escalation)의 판단 근거지만, 자연재해 즉시 보상조치(Supervisor 미개입, 고정 규칙)는 그 사실 자체를 알 수 있는 고정 문자열을 남긴다. 해소/지연없음 전이 시 null로 복귀 |
 | join_waiting_since | timestamp/null | 패키지 조립 무한대기 방지용 타임아웃 기준. **첫 대기 시각 보존** (재진입 시 덮어쓰지 않음), 봉인 시 null로 복귀 |
 | notification_log | list[NotificationEntry] | {stage, sent_at, enabled_at_time} — 판단 아닌 기록 |
@@ -471,6 +393,40 @@ class CompensationRecord(TypedDict):
 
 조립 시점엔 null. 추적agent가 채운다 — item_status가 "출고됨" 이상으로 전진할 때마다
 진행 단계 기반 placeholder 좌표로 갱신 (실제 GPS 폴링 아님).
+
+<a id="schema-pendingdecision"></a>
+### PendingDecision (item.pending_decision)
+```python
+class PendingDecision(TypedDict):
+    decision_type: str  # 예: "품목_회복가능성_판단"
+    reasoning: str       # 왜 이 시점에 운영자가 봐야 하는지
+    requested_at: str
+```
+Stage1(경로B) 판정이 열려있는 동안의 "현재 결정" 자리(원칙3 — 판단). v16 신설, 舊 escalated.
+이 POC에서는 재시도 한도 소진과 같은 tick에서 항상 즉시 자동 해소되므로 실제로 non-None으로
+관측되지 않는다 — "미구현/죽은 필드 종합" 참고.
+
+<a id="schema-resolveddecision"></a>
+### ResolvedDecision (item.decision_log 원소)
+```python
+class ResolvedDecision(TypedDict):
+    decision_type: str
+    outcome: str          # 예: "회복불가_품목취소" / "회복가능_부분수령적용" / "회복가능_합배송적용"
+    decided_at: str
+    reasoning: str
+```
+`pending_decision`(판단)과 짝을 이루는 기록 필드(원칙3) — 해소된 결정이 여기에 append된다.
+
+<a id="schema-compensationrecord"></a>
+### CompensationRecord (package.compensation)
+```python
+class CompensationRecord(TypedDict):
+    action: str        # POC 범위: "환불"만 (재발송은 확장 지점)
+    executed_at: str
+```
+포장대기게이트/배송중게이트가 공유하는 보상조치 실행 기록(v16 신설, 舊 escalated) — 판단이
+즉시 액션으로 끝나 persist할 "대기 상태"가 없어진다는 뜻이기도 하다. non-null이면 이후 두
+게이트 모두 스킵한다.
 
 <a id="schema-userprofile"></a>
 ### UserProfile (별도 캡슐, 참조 전용)
@@ -524,6 +480,24 @@ class CompensationRecord(TypedDict):
   부수 효과: `in_transit_delay_gate`가 이제 배송 시작 전 1회가 아니라 배송 진행 중에도 매 틱
   재호출된다 — "배송중게이트"라는 이름이 오히려 이제야 실제 동작과 맞아떨어짐(舊 open question
   "이름/구조 재검토"도 이걸로 해소). 재검토 조건 없음 — 시나리오 12로 재현·검증 완료.
+
+- **`InternalOrderStatus` 값 이름 — "부분완료" 1개만 신설로 확정(대칭 2개 값 아님).**
+  대칭되는 2개 값(부분배송중/부분완료)도 검토했으나, 원칙2(순차단계 enum vs 교차조건 bool)
+  관점에서 "취소/제외 항목이 있는가"는 진행 단계(조립중→출고준비→배송중→완료)와 독립된 축이라는
+  결론. 진행 중에는 그 사실을 `item.customer_facing_status`가 이미 드러내므로, 종결 시점에만
+  "완료" 대신 "부분완료"로 구분하는 최소 변경을 택했다(5단계 → 6단계, 확정 근거는 JOURNAL.md
+  6단계 참고).
+
+- **Package 보상조치 실행 범위 — 환불만으로 확정.**
+  재발송은 fulfillment 재진입(창고처리 단계부터 다시 태우는 것)이 필요한데, 그래프 재진입성
+  자체가 이미 별도 과제로 남아있어 이번 스코프에 넣지 않았다 — "확장 지점" 절에 문서화만 해둠
+  (JOURNAL.md 6단계 참고).
+
+- **새 데모 트리거 — `ItemDelayReason="통관지연"` 신설로 확정.**
+  기존 재고부족(resolve_at=2)/검수불량(resolve_at=1)은 항상 `MAX_GATE_RETRIES` 이전에 해소돼
+  "회복가능 지연이 실제로 에스컬레이션까지 도달"하는 경로가 구조상 도달 불가능했다. 회복가능이지만
+  `resolve_at=None`(재시도로는 절대 안 풀림)인 사유를 추가해 이 경로를 데모로 재현 가능하게
+  했다(JOURNAL.md 6단계 참고).
 
 ---
 

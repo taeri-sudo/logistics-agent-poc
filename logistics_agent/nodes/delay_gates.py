@@ -4,7 +4,7 @@
 넘기면 Stage1 판정(회복불가→품목취소 / 회복가능→선호도 자동적용)으로 즉시 귀결되고,
 Package(포장대기게이트/배송중게이트)는 재시도 한도를 넘기거나 회복불가로 분류되면 보상조치
 (환불) 실행으로 즉시 귀결된다 — 어느 쪽도 "escalated"로 표시만 해두고 사람을 기다리는 대기
-상태를 persist하지 않는다(v16 재설계, DESIGN.md "사람 개입 워크플로우" 참고).
+상태를 persist하지 않는다(v16 재설계, DESIGN.md "핵심 개념 > 판단 vs 개입 vs escalated" 참고).
 """
 
 from __future__ import annotations
