@@ -48,7 +48,7 @@ def run_demo() -> None:
 
     print()
     print("=" * 60)
-    print("시나리오 3: 배송지 3곳(주소록2 + 신규1) + 재고부족 1건 → 봉인 2 / 대기 1")
+    print("시나리오 3: 배송지 3곳(주소록2 + 신규1) + 재고부족 1건(피킹지연게이트에서 해소) → 봉인 3 / 대기 0")
     print("=" * 60)
     split_items = [
         {
@@ -67,7 +67,9 @@ def run_demo() -> None:
             "location": {"zone": "C", "shelf": "07", "bin": "02"},
         },
         {
-            # 재고부족 → 피킹 스킵 → ADDR-OFFICE 패키지는 required=2 arrived=1 로 대기
+            # 재고부족 → 피킹 스킵 → 피킹지연게이트가 retry_count=2에서 해소(MAX_GATE_RETRIES=3
+            # 이내라 Stage1까지 안 감) → 패키지조립agent 진입 시점엔 이미 피킹완료라 ADDR-OFFICE도
+            # required=2 arrived=2로 정상 봉인됨
             "item_id": "SKU-004",
             "delivery_address_id": "ADDR-OFFICE",
             "item_delay_reason": "재고부족",
